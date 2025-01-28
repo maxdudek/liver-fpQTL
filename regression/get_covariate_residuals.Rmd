@@ -1,0 +1,64 @@
+This notebook is used to find the residuals of footprint scores once covariates have been regressed out. For performance reasons, this is done only for variants that are fpQTLs.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(parallel)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("FP_methods/", FP_METHOD)
+```
+
+```{r}
+fpscore_matrix_fpQTLs <- readRDS(paste0(DIR,
+                                 "/data/fpscore_matrix_normalized_fpQTLs_with_covariates.Rds"))
+genotype_matrix_fpQTLs <- readRDS(paste0(DIR, "/data/genotype_matrix_fpQTLs_with_covariates.Rds"))
+
+# Create an empty matrix to store the residuals from regressing out covariates
+fpscore_residual_matrix_fpQTLs <- matrix(, nrow = nrow(fpscore_matrix_fpQTLs), 
+                                  ncol = ncol(fpscore_matrix_fpQTLs),
+                                  dimnames = list(rownames(fpscore_matrix_fpQTLs), 
+                                                  colnames(fpscore_matrix_fpQTLs)))
+
+regression_covariates <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/sample_covariates/regression_covariates_170.txt"))
+
+regression_covariates %>%
+  filter(sample_id %in% colnames(fpscore_matrix_fpQTLs)) %>%
+  arrange(match(sample_id, colnames(fpscore_matrix_fpQTLs))) ->
+  regression_covariates
+```
+
+
+```{r}
+for (i in 1:nrow(fpscore_matrix_fpQTLs)) {
+  if (i %% 10 == 0) {
+    print(sprintf("Ran regression on %d variants", i))
+  }
+  
+  x <- genotype_matrix_fpQTLs[i,]
+  y <- fpscore_matrix_fpQTLs[i,]
+  
+  covariate_model <- lm(y ~ regression_covariates$sex + regression_covariates$batch +
+                          regression_covariates$PC1 + regression_covariates$PC2 + 
+                          regression_covariates$PC3)
+  covariate_residuals <- residuals(covariate_model)
+  
+  # Store residuals 
+  fpscore_residual_matrix_fpQTLs[i,] <- covariate_residuals
+}
+
+
+```
+
+```{r}
+fpscore_residual_matrix_fpQTLs %>% saveRDS(paste0(DIR,
+                                                  "/data/fpscore_residual_matrix_fpQTLs.Rds"))
+```
+
+
+
+
+
+

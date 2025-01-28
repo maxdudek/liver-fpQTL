@@ -1,0 +1,208 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(viridis)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+tables2x2_GWAS <- list.files(
+    path = "tables", pattern = "tables_2x2_GWAS_proxies_r2=0.8\\.txt$", 
+    full.names = TRUE, recursive = TRUE
+  ) %>%
+  grep("/old/", ., invert = TRUE, value = TRUE) %>%
+  lapply(read.delim) %>%
+  bind_rows()
+  
+tables2x2_QTLs <- list.files(
+    path = "tables", pattern = "tables_2x2_QTLs\\.txt$", 
+    full.names = TRUE, recursive = TRUE
+  ) %>%
+  grep("/old/", ., invert = TRUE, value = TRUE) %>%
+  lapply(read.delim) %>%
+  bind_rows()
+
+tables2x2 <- rbind(tables2x2_QTLs, tables2x2_GWAS)
+```
+
+
+```{r}
+traits <- c("BMI", "child_obesity", "T2D", "NAFLD", "ALT", "ALP", "GGT",
+            "lipids_HDL", "lipids_LDL", "lipids_nonHDL", "lipids_TC", "lipids_TG", "SCZ", "BIP",
+            "liver_eQTL", "liver_caQTL")
+
+LOW <- .Machine$double.xmin
+tables2x2 <- tables2x2 %>%
+  mutate(trait = factor(trait, levels = rev(traits))) %>%
+  mutate(fishers_p = pmax(fishers_p, LOW)) # Fix P = 0
+
+```
+
+```{r}
+tables2x2_QTLs %>%
+  filter(covariates, fp_method == "PRINT_no_gaussian")
+```
+
+
+```{r}
+tables2x2 %>%
+  filter(covariates) %>%
+  filter(fp_method == "PRINT_no_gaussian")
+```
+
+
+
+```{r fig.height=10, fig.width=10}
+options(scipen = 999)
+tables2x2 %>%
+  filter(covariates) %>%
+  filter(fp_method != "PRINT_beta_FDR10") %>%
+  filter(grepl("PRINT_beta_", fp_method, fixed=TRUE)) %>%
+  filter(!grepl("geq10", fp_method, fixed=TRUE)) %>%
+  filter(!grepl("QTL", trait, fixed=TRUE)) %>%
+  ggplot(aes(x = odds_ratio, y = trait, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high)) +
+  geom_point(data = . %>% filter(fishers_p < 0.05), shape = "*", color = "black") +
+  scale_color_gradient(low = "gold", high = "purple") +
+  scale_x_log10() +
+  facet_wrap(~fp_method, ncol = 4) +
+  theme_bw()
+```
+
+```{r}
+tables2x2_GWAS_old %>%
+  filter(covariates) %>%
+  filter(grepl("PRINT_no_gaussian", fp_method, fixed=TRUE)) %>%
+  filter(!grepl("QTL", trait, fixed=TRUE)) %>%
+  mutate(n_snps = snps_neither + snps_fpQTL_only + snps_sig_only + snps_sig_and_fpQTL)
+
+tables2x2 %>%
+  filter(covariates) %>%
+  filter(grepl("PRINT_no_gaussian", fp_method, fixed=TRUE)) %>%
+  filter(!grepl("QTL", trait, fixed=TRUE))%>%
+  mutate(n_snps = snps_neither + snps_fpQTL_only + snps_sig_only + snps_sig_and_fpQTL)
+
+
+```
+
+
+
+
+
+
+```{r fig.width=5, fig.height=4.5}
+traits <- c("BMI", "T2D", "NAFLD", "ALT", "ALP", "GGT",
+            "lipids_HDL", "lipids_LDL", "lipids_nonHDL", "lipids_TC", "lipids_TG")
+traits.name <- c("BMI", "T2D", "MASLD", "Enzymes\nALT", "Enzymes\nALP", "Enzymes\nGGT", "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG")
+
+tables2x2 %>%
+  filter(covariates, fp_method == "PRINT_no_gaussian") %>%
+  filter(trait %in% traits) %>%
+  ggplot(aes(x = odds_ratio, y = trait, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 1) +
+  geom_point(data = . %>% filter(fishers_p < 0.05), shape = "*", color = "white", size = 4) +
+  scale_color_viridis(option = "plasma", direction = -1,
+                       name = bquote(-log[10](p))) +
+  scale_x_log10() +
+  scale_y_discrete(labels = rev(traits.name)) +
+  xlab("Odds ratio") +
+  ylab("Trait") +
+  # ggtitle("Enrichment of fpQTLs with GWAS and QTL variants") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 10))
+
+ggsave("figures/odds_ratios_GWAS_proxies_PRINT_no_gaussian_no_QTL.png", width = 5, height = 4.5, units = "in", dpi = 600)
+```
+
+# Same plot, with QTLs
+```{r fig.width=5, fig.height=4.5}
+traits <- c("BMI", "T2D", "NAFLD", "ALT", "ALP", "GGT",
+            "lipids_HDL", "lipids_LDL", "lipids_nonHDL", "lipids_TC", "lipids_TG",
+            "liver_eQTL", "liver_caQTL")
+traits.name <- c("BMI", "T2D", "MASLD", "Enzymes\nALT", "Enzymes\nALP", "Enzymes\nGGT", "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG",
+            "Liver eQTL\n(GTEx)", "Liver caQTL\n(same samples)")
+
+tables2x2 %>%
+  filter(covariates, fp_method == "PRINT_no_gaussian") %>%
+  filter(trait %in% traits) %>%
+  ggplot(aes(x = odds_ratio, y = trait, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 1) +
+  geom_point(data = . %>% filter(fishers_p < 0.05, -log10(fishers_p) > 8), shape = "*", color = "white", size = 4) +
+  geom_point(data = . %>% filter(fishers_p < 0.05, -log10(fishers_p) <= 8), shape = "*", color = "black", size = 4) +
+  scale_color_viridis(option = "plasma", direction = -1, 
+                       trans = "log", breaks = c(1, 7, 50),
+                       name = bquote(-log[10](p))) +
+  scale_x_log10() +
+  scale_y_discrete(labels = rev(traits.name)) +
+  xlab("Odds ratio") +
+  ylab("Trait") +
+  # ggtitle("Enrichment of fpQTLs with GWAS and QTL variants") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 10))
+
+ggsave("figures/odds_ratios_GWAS_proxies_PRINT_no_gaussian.png", width = 5, height = 4.5, units = "in", dpi = 600)
+```
+
+# MANUSCRIPT - Figure 4A
+```{r fig.width=4.5, fig.height=4}
+FP_METHOD <- "PRINT_beta_cloglog"
+
+traits <- c("BMI", "T2D", "NAFLD", "ALT", "ALP", "GGT",
+            "lipids_HDL", "lipids_LDL", "lipids_nonHDL", "lipids_TC", "lipids_TG")
+traits.name <- c("BMI", "T2D", "MASLD", "Enzymes\nALT", "Enzymes\nALP", "Enzymes\nGGT", "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG")
+
+tables2x2 %>%
+  filter(covariates, fp_method == FP_METHOD) %>%
+  filter(trait %in% traits) %>%
+  ggplot(aes(x = odds_ratio, y = trait, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 1) +
+  geom_point(data = . %>% filter(fishers_p < 0.05), shape = "*", color = "white", size = 4) +
+  scale_color_viridis(option = "plasma", direction = -1,
+                       name = bquote(-log[10](p))) +
+  scale_x_log10() +
+  scale_y_discrete(labels = rev(traits.name)) +
+  xlab("Odds ratio") +
+  ylab("Trait") +
+  # ggtitle("Enrichment of fpQTLs with GWAS and QTL variants") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 10))
+
+ggsave("figures/%s_odds_ratios_GWAS_proxies_no_QTL.png" %>% sprintf(FP_METHOD), 
+       width = 4.5, height = 4, units = "in", dpi = 600)
+```
+
+
+# MANUSCRIPT - Supplementary table
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+
+traits <- c("liver_eQTL", "liver_caQTL", "BMI", "ALT", "ALP", "GGT",
+            "lipids_HDL", "lipids_LDL", "lipids_nonHDL", "lipids_TC", "lipids_TG", "NAFLD", "T2D")
+
+tables2x2 %>%
+  filter(covariates, fp_method == FP_METHOD) %>%
+  filter(trait %in% traits) %>%
+  arrange(match(trait, traits)) %>%
+  mutate(`Total SNPs` = snps_neither + snps_fpQTL_only + snps_sig_only + snps_sig_and_fpQTL,
+          `Total fpQTLs` = snps_fpQTL_only + snps_sig_and_fpQTL,
+         `Trait SNPs` = snps_sig_only + snps_sig_and_fpQTL) %>%
+  dplyr::rename(
+    Trait = trait, `Trait fpQTLs` = snps_sig_and_fpQTL, `P (Fisher's Exact Test)` = fishers_p,
+    `Odds Ratio` = odds_ratio, `Odds Ratio 95CI Low` = odds_ratio_95_low, `Odds Ratio 95CI High` = odds_ratio_95_high
+    ) %>%
+  select(Trait, `Total SNPs`, `Total fpQTLs`, `Trait SNPs`, `Trait fpQTLs`, 
+         `Odds Ratio`, `Odds Ratio 95CI Low`, `Odds Ratio 95CI High`,  `P (Fisher's Exact Test)`) %>%
+  write.table("tables/%s/%s_GWAS_supplementary_table.txt" %>% sprintf(FP_METHOD, FP_METHOD),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+  
+
+```
+
+

@@ -1,0 +1,59 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(viridis)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+# Data from ADASTRA
+# PRINT_beta_cloglog
+ADASTRA_enrichment <-
+  data.frame(
+    cell_type = c("HepG2", "Liver", "Liver\n(Right lobe)", "Hepatocyte"),
+    ASB_SNPs = c(12, 6, 4, 3),
+    nonASB_SNPs = c(29, 6, 1, 1),
+    expected_ASP_SNPs = c(9572, 2269, 234, 747),
+    expected_nonASB_SNPs = c(268655, 37779, 6619, 5014)
+  )
+
+results <- data.frame()
+for (i in 1:nrow(ADASTRA_enrichment)) {
+  m <- ADASTRA_enrichment[i, 2:5] %>% as.matrix() %>% c() %>% matrix(nrow = 2)
+  ft <- fisher.test(m)
+  
+  new_row <-
+    data.frame(
+      odds_ratio = ft$estimate,
+      odds_ratio_95_low = ft$conf.int[1],
+      odds_ratio_95_high = ft$conf.int[2],
+      fishers_p = ft$p.value,
+      row.names = NULL
+    )
+  
+  results <- rbind(results, new_row)
+}
+
+ADASTRA_enrichment <- cbind(ADASTRA_enrichment, results)
+
+
+```
+
+```{r fig.height=4, fig.width=5}
+ADASTRA_enrichment %>%
+  ggplot(aes(x = odds_ratio, y = cell_type, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 1) +
+  geom_point(data = . %>% filter(fishers_p < 0.05), shape = "*", 
+             color = "white", size = 4) +
+  scale_color_viridis(option = "plasma", direction = -1, name = bquote(-log[10](p))) +
+  scale_x_log10() +
+  xlab("Odds ratio") +
+  ylab("Trait") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 10))
+
+ggsave("figures/ADASTRA_enrichment.png", width = 5, height = 4, units = "in")
+```
+
+

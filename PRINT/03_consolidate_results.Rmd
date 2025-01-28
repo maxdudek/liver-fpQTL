@@ -1,0 +1,64 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(pbapply)
+```
+
+
+```{r}
+DIR <- "../../../raw_data/brandon_liver_ATAC/"
+variant_info_maf5_ocr <- readRDS(paste0(DIR, "vcf/variant_info_maf5_ocr.Rds"))
+covariates_170 <- read.delim(paste0(DIR, "sample_covariates/regression_covariates_170.txt"))
+```
+
+
+Read all result files
+```{r}
+sample_filenames <- paste0("results_by_sample/", 
+                           covariates_170$sample_id, "_variant_results.rds")
+ldf <- pblapply(sample_filenames, readRDS)
+```
+
+```{r}
+names(ldf)
+```
+
+
+
+```{r}
+fpscore_matrix <- ldf %>% pblapply(function(x) {x$TFBS}) %>% do.call(cbind, .)
+colnames(fpscore_matrix) <- covariates_170$sample_id
+rownames(fpscore_matrix) <- variant_info_maf5_ocr$variant_id
+
+fpscore_matrix %>% saveRDS("consolidated_results/PRINT_fpscore_matrix.Rds")
+```
+
+
+```{r}
+local_insertion_matrix <- 
+  ldf %>% lapply(function(x) {x$local_insertion_count}) %>% do.call(cbind, .)
+
+colnames(local_insertion_matrix) <- covariates_170$sample_id
+rownames(local_insertion_matrix) <- variant_info_maf5_ocr$variant_id
+
+local_insertion_matrix %>% saveRDS("consolidated_results/PRINT_local_insertion_matrix.Rds")
+```
+
+
+Create fpscore matrix with only local cutsites >= 10
+```{r}
+fpscore_matrix <- readRDS("consolidated_results/PRINT_fpscore_matrix.Rds")
+local_insertion_matrix <- readRDS("consolidated_results/PRINT_local_insertion_matrix.Rds")
+```
+
+```{r}
+fpscore_matrix[local_insertion_matrix < 10] <- NA
+```
+
+```{r}
+fpscore_matrix %>% saveRDS("../regression/FP_methods/PRINT_local_cutsites_geq10/data/fpscore_matrix.Rds")
+```
+
+
+
+
+

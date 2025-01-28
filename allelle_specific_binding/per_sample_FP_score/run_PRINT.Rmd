@@ -1,0 +1,149 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+
+PRINTdir <- "/home/dudekmf/local/src/PRINT/"
+source(paste0(PRINTdir, "code/utils.R"))
+source(paste0(PRINTdir, "code/getCounts.R"))
+source(paste0(PRINTdir, "code/getBias.R"))
+source(paste0(PRINTdir, "code/getFootprints.R"))
+source(paste0(PRINTdir, "code/getSubstructures.R"))
+source(paste0(PRINTdir, "code/visualization.R"))
+source(paste0(PRINTdir, "code/getGroupData.R"))
+source(paste0(PRINTdir, "code/footprintTracking.R"))
+source(paste0(PRINTdir, "code/getTFBS.R"))
+```
+
+# Separate allelic_fragments.txt into multiple files based on variant and allele
+```{r}
+allelic_fragments <- read.delim("../allelic_fragments.txt")
+
+fpQTLs <- read.delim("../../regression/FP_methods/PRINT_no_gaussian/regression_results/fpQTLs_covariates_FDR5.txt")
+
+allelic_fragments <- allelic_fragments %>%
+  inner_join(fpQTLs %>% select(variant_id, variant_chrom), by = join_by(rsID == variant_id))
+```
+
+```{r}
+list_of_dfs <- allelic_fragments %>%
+  group_split(rsID, allele) 
+
+for (df in list_of_dfs) {
+  rsID <- df$rsID[1]
+  allele <- df$allele[1]
+  
+  rsID_allele <- paste(rsID, allele, sep = "_")
+  print(rsID_allele)
+  
+  # Put sample in the barcode slot so we can calculate per-sample FP scores
+  df %>%
+    select(variant_chrom, insertion_5prime, insertion_3prime, sample, count) %>%
+    write.table(paste0("allelic_fragments/", rsID_allele, ".tsv"), 
+                row.names = FALSE, col.names = FALSE, quote = FALSE, sep = "\t")
+}
+```
+
+
+
+```{r}
+fpQTLs <- read.delim("../../regression/FP_methods/PRINT_no_gaussian/regression_results/fpQTLs_covariates_FDR5.txt")
+```
+
+```{r}
+i <- 1
+allele <- "ref"
+rsID <- fpQTLs$variant_id[i]
+rsID_allele <- paste(rsID, allele, sep = "_")
+
+
+```
+
+Initialize project
+```{r}
+project <- footprintingProject(projectName = rsID_allele,
+                               refGenome = "hg38")
+projectMainDir <- "PRINT_temp/"
+projectDataDir <- paste0(projectMainDir, "data/", rsID_allele, "/")
+dataDir(project) <- projectDataDir
+mainDir(project) <- projectMainDir
+
+# Set some project variables
+pathToFrags <- paste0("allelic_fragments/", rsID_allele, ".tsv")
+
+frags_df <- read.table(pathToFrags)
+het_samples <- frags_df %>% pull(V4) %>% unique()
+
+barcodeGroups <- data.frame(
+  barcode = het_samples,
+  group = 1:length(het_samples)
+)
+barcodeGrouping(project) <- barcodeGroups
+groups(project) <- mixedsort(unique(barcodeGroups$group))
+groupCellType(project) <- "liver"
+```
+
+
+Load region of interest around variant
+```{r}
+w <- 100
+chrom <- fpQTLs$variant_chrom[i]
+start <- fpQTLs$variant_pos[i]-w
+end <- fpQTLs$variant_pos[i]+w
+
+# Create a second "dummy" region because PRINT complains if we only have one region
+regions <- GRanges(seqnames = c(chrom, chrom),
+                   ranges = IRanges(start = c(start, start+1), 
+                                    end = c(end, end+1)))
+regionRanges(project) <- regions
+```
+
+Calculate bias in variant regions
+```{r}
+project <- getPrecomputedBias(project, nCores = 1)
+```
+
+
+Get count tensors
+```{r}
+project <- getCountTensor(project, 
+                          pathToFrags, 
+                          barcodeGroups, 
+                          returnCombined = F,
+                          chunkSize = 2,
+                          nCores = 1)
+```
+
+
+
+
+Load dispersion model
+```{r}
+for(kernelSize in 2:100){
+  cat(kernelSize, " ")
+  dispModel(project, as.character(kernelSize)) <-
+  readRDS(paste0(PRINTdir, "data/shared/dispModel/dispersionModel", kernelSize, "bp.rds"))
+}
+```
+
+Load TFBS model
+```{r}
+h5Path <- paste0(PRINTdir, "data/TFBSPrediction/TFBS_model.h5")
+TFBindingModel(project) <- loadTFBSModel(h5Path)
+```
+
+Get TF habitation scores
+```{r}
+project <- getTFBS(project, 
+                   innerChunkSize = 2,
+                   chunkSize = 2,
+                   nCores = 1)
+```
+
+```{r}
+TFBS_results <- readRDS(paste0(dataDir(project), "chunkedTFBSResults/chunk_1.rds"))
+FP_scores <- TFBS_results[[1]][[1]]$TFBSScores[1,]
+```
+
+
+
+

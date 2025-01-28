@@ -1,0 +1,204 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(parallel)
+CORES <- 64
+
+PRINTdir <- "/home/dudekmf/local/src/PRINT/"
+source(paste0(PRINTdir, "code/utils.R"))
+source(paste0(PRINTdir, "code/getCounts.R"))
+source(paste0(PRINTdir, "code/getBias.R"))
+source(paste0(PRINTdir, "code/getFootprints.R"))
+source(paste0(PRINTdir, "code/getSubstructures.R"))
+source(paste0(PRINTdir, "code/visualization.R"))
+source(paste0(PRINTdir, "code/getGroupData.R"))
+source(paste0(PRINTdir, "code/footprintTracking.R"))
+source(paste0(PRINTdir, "code/getTFBS.R"))
+```
+
+Initialize project
+```{r}
+projectName <- "3782-BW-2"
+project <- footprintingProject(projectName = projectName,
+                               refGenome = "hg38")
+projectMainDir <- "./"
+projectDataDir <- paste0(projectMainDir, "data/", projectName, "/")
+dataDir(project) <- projectDataDir
+mainDir(project) <- projectMainDir
+
+# Set some project variables
+pathToFrags <- paste0("frags/", projectName, ".tsv")
+
+barcodeGroups <- data.frame(
+  barcode = projectName,
+  group = 1L
+)
+barcodeGrouping(project) <- barcodeGroups
+groups(project) <- mixedsort(unique(barcodeGroups$group))
+groupCellType(project) <- "liver"
+```
+
+
+Load regions of interest
+```{r}
+variant_info_ocr <- readRDS("../../../raw_data/brandon_liver_ATAC/vcf/variant_info_maf5_ocr.Rds")
+w <- 100
+
+regions <- GRanges(seqnames = variant_info_ocr$variant_chrom,
+                   ranges = IRanges(start = variant_info_ocr$variant_pos-w, 
+                                    end = variant_info_ocr$variant_pos+w))
+regionRanges(project) <- regions
+```
+
+Calculate bias in variant regions
+```{r}
+project <- getPrecomputedBias(project, nCores = CORES)
+saveRDS(regionBias(project), "variant_predBias.rds")
+```
+
+
+Load bias in variant regions
+```{r}
+regionBias(project) <- readRDS("variant_predBias.rds")
+```
+
+Get count tensors
+```{r}
+project <- getCountTensor(project, 
+                          pathToFrags, 
+                          barcodeGroups, 
+                          returnCombined = F,
+                          chunkSize = 50000,
+                          nCores = CORES)
+```
+
+
+
+
+Load dispersion model
+```{r}
+for(kernelSize in 2:100){
+  cat(kernelSize, " ")
+  dispModel(project, as.character(kernelSize)) <-
+  readRDS(paste0(PRINTdir, "data/shared/dispModel/dispersionModel", kernelSize, "bp.rds"))
+}
+```
+
+Load TFBS model
+```{r}
+h5Path <- paste0(PRINTdir, "data/TFBSPrediction/TFBS_model.h5")
+TFBindingModel(project) <- loadTFBSModel(h5Path)
+```
+
+Get TF habitation scores
+```{r}
+project <- getTFBS(project, 
+                   innerChunkSize = 100,
+                   chunkSize = 50000,
+                   nCores = CORES)
+```
+
+Extract FP scores and insertion counts
+```{r}
+TFBSDir <- paste0(dataDir(project), "chunkedTFBSResults/")
+TFBSChunkFiles <- gtools::mixedsort(list.files(TFBSDir))
+nChunks <- length(TFBSChunkFiles)
+
+scores <- c()
+nInsertions <- c()
+for (i in 1:nChunks) {
+  cat("Chunk ", i, "\n")
+  TFBSChunkData <- readRDS(paste0(TFBSDir, "chunk_", i, ".rds"))
+  CountChunkData <- readRDS(paste0(dataDir(project), 
+                                   "chunkedCountTensor/chunk_", i, ".rds"))
+  
+  # Add scores
+  scores <- c(scores, sapply(TFBSChunkData, function(x) {x$TFBSScores}))
+  nInsertions <- c(nInsertions, sapply(CountChunkData, function(x) {sum(x$count)}))
+}
+length(scores)
+length(nInsertions)
+```
+
+Write results
+```{r}
+data.frame(
+  variant_id = variant_info_ocr$variant_id,
+  TFBS = scores,
+  local_insertion_count = as.integer(nInsertions)
+) ->
+test_data 
+
+test_data %>% saveRDS(paste0(projectDataDir, "test_score_data.rds"))
+
+```
+
+# Testing
+
+```{r}
+test_data <- readRDS(paste0(projectDataDir, "test_score_data.rds"))
+```
+
+
+```{r}
+test_data %>%
+  ggplot(aes(x = TFBS)) +
+  geom_histogram(bins = 100) +
+  xlim(c(0, 0.25))
+```
+
+```{r}
+test_data %>%
+  filter(near(scores, 0.129005829))
+
+test_data %>%
+  arrange(-scores) %>%
+  head(100)
+
+test_data$scores %>% range(na.rm = FALSE)
+```
+
+```{r}
+test_data %>%
+  filter(local_insertion_count < 20) %>%
+  ggplot(aes(x = local_insertion_count)) +
+  geom_bar()
+```
+
+
+```{r}
+test_data %>%
+  dplyr::count(as.factor(local_insertion_count))
+
+test_data %>%
+  filter(local_insertion_count > 20) %>%
+  nrow()
+```
+
+
+```{r}
+test_data %>%
+  filter(local_insertion_count < 25 & local_insertion_count > 0) %>%
+  ggplot(aes(x = TFBS)) +
+  geom_histogram(aes(y = ..density..), bins = 100) +
+  xlim(c(0, 0.25)) +
+  facet_wrap(~local_insertion_count)
+```
+
+
+```{r}
+Why do we get that spike in the histogram?
+<!-- ```{r} -->
+<!-- quantile(scores, probs = seq(.01, .99, by = .01)) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- countChunk <- readRDS(paste0(projectDataDir, "chunkedCountTensor/chunk_1.rds")) -->
+
+<!-- sum(countChunk[[10]]$count) -->
+
+<!-- weird_regions <- which(near(scores[1:50000], 0.129005829)) -->
+
+<!-- countChunk[[weird_regions[6]]] -->
+<!-- countChunk[[weird_regions[6]]] -->
+<!-- ``` -->
+ANSWER: those are variants with no Tn5 insertions within 100 bp

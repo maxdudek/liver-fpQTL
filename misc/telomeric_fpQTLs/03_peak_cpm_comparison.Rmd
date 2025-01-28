@@ -1,0 +1,213 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+library(ggpubr)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results <- regression_results %>%
+  mutate(fpQTL = ST_qval <= 0.05)
+  
+
+regression_results %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+regression_results <- regression_results %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+```
+
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+```
+
+
+```{r}
+peak_cpm <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/peak_info/peak_mean_tpm.txt"))
+
+peak_cpm <- peak_cpm %>%
+  mutate(peak_chr = paste0("chr", peak_chr))
+
+peak_ranges <- GRanges(seqnames = peak_cpm$peak_chr, 
+                         ranges = IRanges(start = peak_cpm$peak_start, 
+                                          end = peak_cpm$peak_end))
+```
+
+```{r}
+fpQTL.range <- GRanges(seqnames = fpQTLs_telomeric$variant_chrom, 
+                         ranges = IRanges(start = fpQTLs_telomeric$variant_pos, 
+                                          end = fpQTLs_telomeric$variant_pos))
+```
+
+```{r}
+overlap <- findOverlaps(fpQTL.range, peak_ranges, select = "arbitrary")
+
+fpQTLs_telomeric$peak_cpm_mean <- peak_cpm$peak_cpm_mean[overlap]
+```
+
+
+
+
+```{r}
+TELOMERE_SIZE <- 1e6
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = peak_cpm_mean, fill = telomeric)) +
+  geom_histogram(bins = 50) +
+  facet_wrap(~telomeric) +
+  xlim(c(0,2.5)) +
+  theme_classic()
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = peak_cpm_mean, fill = telomeric)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50) +
+  facet_wrap(~telomeric) +
+  xlim(c(0,2.5)) +
+  theme_classic()
+```
+
+```{r fig.width=8, fig.height=5}
+COLORS <- c("grey", "#78d158")
+
+df <- fpQTLs_telomeric %>%
+  mutate(
+    Mb1 = c("Central", "Near-telomeric")[telomeric_1Mb + 1L],
+    Mb2 = c("Central", "Near-telomeric")[telomeric_2Mb + 1L],
+    Mb5 = c("Central", "Near-telomeric")[telomeric_5Mb + 1L]
+  ) %>%
+  pivot_longer(cols = starts_with("Mb"), names_to = "telomere_threshold", values_to = "telomeric") %>%
+  mutate(telomere_threshold = case_when(
+    telomere_threshold == "Mb1" ~ ">1 Mb",
+    telomere_threshold == "Mb2" ~ ">2 Mb",
+    telomere_threshold == "Mb5" ~ ">5 Mb"
+  ))
+
+df %>%
+  ggplot(aes(x = telomeric, y = peak_cpm_mean, fill = telomeric)) +
+  geom_boxplot() + 
+  scale_fill_manual(values = COLORS, guide = NULL) +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 1.5)) +
+  ylab("Mean peak CPM")+
+  xlab(NULL) +
+  stat_compare_means() +
+  theme_classic() +
+  ggtitle("Mean peak CPM , by different telomeric thresholds")
+ggsave("figures/%s/%s_mean_peak_cpm_boxplot_fpQTLs.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 8, height = 5, units = "in")
+```
+
+2 Mb only
+```{r fig.width=3, fig.height=3}
+fpQTLs_telomeric %>%
+  ggplot(aes(x = telomeric_2Mb, y = peak_cpm_mean, fill = telomeric_2Mb)) +
+  geom_boxplot() + 
+  scale_fill_manual(values = COLORS, guide = NULL) +
+  ylim(c(0, 1.5)) +
+  ylab("Mean peak CPM")+
+  xlab(NULL) +
+  scale_x_discrete(labels = c("Central", "Telomeric-neighboring")) +
+  stat_compare_means() +
+  theme_classic()
+ggsave("figures/%s/%s_mean_peak_cpm_boxplot_fpQTLs_2Mb.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3, units = "in")
+```
+
+# Statistical tests
+```{r}
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) Mean peak CPM\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_1Mb) %>% pull(peak_cpm_mean)
+y <- fpQTLs_telomeric %>% filter(telomeric_1Mb) %>% pull(peak_cpm_mean)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (2 Mb) Mean peak CPM\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_2Mb) %>% pull(peak_cpm_mean)
+y <- fpQTLs_telomeric %>% filter(telomeric_2Mb) %>% pull(peak_cpm_mean)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (5 Mb) Mean peak CPM\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_5Mb) %>% pull(peak_cpm_mean)
+y <- fpQTLs_telomeric %>% filter(telomeric_5Mb) %>% pull(peak_cpm_mean)
+t.test(x,y)
+cat("\n\n")
+```
+
+# Peak CPM distribution of ALL variants
+```{r}
+regression_results.range <- GRanges(seqnames = regression_results$variant_chrom, 
+                                     ranges = IRanges(start = regression_results$variant_pos, 
+                                                      end = regression_results$variant_pos))
+
+overlap <- findOverlaps(regression_results.range, peak_ranges, select = "arbitrary")
+
+regression_results$peak_cpm_mean <- peak_cpm$peak_cpm_mean[overlap]
+```
+
+```{r fig.width=3, fig.height=3.5}
+regression_results %>%
+  ggplot(aes(x = fpQTL, y = peak_cpm_mean, fill = fpQTL)) +
+  geom_boxplot() + 
+  scale_x_discrete(labels = c("non-significant SNPs", "fpQTLs")) +
+  scale_y_log10() +
+  scale_fill_manual(values = c("grey", "#cf666a"), guide = NULL) +
+  xlab("") +
+  ylab("Mean peak CPM") +
+  stat_compare_means() +
+  theme_classic()
+
+ggsave("figures/%s/%s_mean_peak_cpm_boxplot_all_vars.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3.5, units = "in")
+```
+
+
+```{r}
+x <- regression_results %>% filter(!fpQTL) %>% pull(peak_cpm_mean)
+y <- regression_results %>% filter(fpQTL) %>% pull(peak_cpm_mean)
+wilcox.test(x, y)
+```
+
+
+

@@ -1,0 +1,147 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(parallel)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("FP_methods/", FP_METHOD, "/")
+```
+
+```{r}
+fpscore_matrix <- readRDS(paste0(DIR, "data/fpscore_matrix_normalized.Rds"))
+genotype_matrix <- readRDS(paste0(DIR, "data/genotype_matrix_regression.Rds"))
+variant_info <- readRDS(paste0(DIR, "data/variant_info_regression.Rds"))
+
+regression_covariates <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/sample_covariates/regression_covariates_170.txt"))
+
+regression_covariates_mat <- regression_covariates %>%
+  filter(sample_id %in% colnames(fpscore_matrix)) %>%
+  arrange(match(sample_id, colnames(fpscore_matrix))) %>%
+  column_to_rownames("sample_id") %>%
+  select(sex, batch, PC1, PC2, PC3) %>%
+  as.matrix()
+
+cat("Verifying sample order in covariates...\n")
+all(colnames(fpscore_matrix) == rownames(regression_covariates_mat))
+
+cat("Verifying variant order in data tables...\n")
+all(rownames(fpscore_matrix) == variant_info$variant_id)
+all(rownames(genotype_matrix) == variant_info$variant_id)
+
+cat("Verifying sample order in data tables...\n")
+all(colnames(fpscore_matrix) == colnames(genotype_matrix))
+```
+
+Create matrix subsets to test
+```{r}
+i <- 1:1000
+fpscore_matrix_small <- fpscore_matrix[i,]
+genotype_matrix_small <- genotype_matrix[i,]
+variant_info_small <- variant_info[i,]
+```
+
+```{r}
+run_regression_on_variant <- function(i) {
+  
+  x <- genotype_matrix_small[i,]
+  y <- fpscore_matrix_small[i,]
+
+  model <- lm(y ~ x + regression_covariates$sex + regression_covariates$batch + regression_covariates$PC1 +
+              regression_covariates$PC2 + regression_covariates$PC3)          
+
+  residuals(model)
+}
+```
+
+```{r}
+residual_matrix <- sapply(1:nrow(fpscore_matrix_small), run_regression_on_variant) %>% t()
+
+dim(residual_matrix)
+residual_matrix[1:10, 1:10]
+```
+Try to do it a faster way with fastLm
+```{r}
+library(Rcpp)
+library(RcppArmadillo)
+
+## start from SEXP, most conversions, longest code
+src <- '
+Rcpp::List fLmSEXP(SEXP Xs, SEXP ys) {
+Rcpp::NumericMatrix Xr(Xs);
+Rcpp::NumericVector yr(ys);
+int n = Xr.nrow(), k = Xr.ncol();
+arma::mat X(Xr.begin(), n, k, false);
+arma::colvec y(yr.begin(), yr.size(), false);
+// fit model y ~ X, extract residuals
+arma::colvec coef = arma::solve(X, y);
+arma::colvec res  = y - X*coef;
+// return the results
+return Rcpp::List::create(Rcpp::Named("coefficients")=coef,Rcpp::Named("res")=res);
+}
+'
+cppFunction(code=src, depends="RcppArmadillo")
+```
+
+```{r}
+run_regression_on_variant_fast <- function(i) {
+  y <- fpscore_matrix_small[i,]
+  X <- cbind(I = 1,genotype_matrix_small[i,],regression_covariates_mat)
+
+  fLmSEXP(X, y)$res
+}
+```
+
+```{r}
+residual_matrix2 <- sapply(1:nrow(fpscore_matrix_small), run_regression_on_variant) %>% t()
+
+dim(residual_matrix2)
+residual_matrix2[1:10, 1:10]
+```
+
+```{r}
+ncores <- 4
+cl <- makeCluster(ncores, outfile="job_out/cluster_out.txt")
+f = file(); sink(file=f) # Silence output
+
+clusterEvalQ(cl, { 
+  suppressPackageStartupMessages({
+    library(tidyverse)
+    library(Rcpp)
+    library(RcppArmadillo)
+  }) 
+
+  # Modify code to extract residuals
+  src <- '
+  Rcpp::List fLmSEXP(SEXP Xs, SEXP ys) {
+  Rcpp::NumericMatrix Xr(Xs);
+  Rcpp::NumericVector yr(ys);
+  int n = Xr.nrow(), k = Xr.ncol();
+  arma::mat X(Xr.begin(), n, k, false);
+  arma::colvec y(yr.begin(), yr.size(), false);
+  // fit model y ~ X, extract residuals
+  arma::colvec coef = arma::solve(X, y);
+  arma::colvec res  = y - X*coef;
+  // return the results
+  return Rcpp::List::create(Rcpp::Named("coefficients")=coef,Rcpp::Named("res")=res);
+  }
+  '
+  cppFunction(code=src, depends="RcppArmadillo")
+})
+
+sink(); close(f)
+clusterExport(cl=cl, varlist=c("genotype_matrix_small", "fpscore_matrix_small", "regression_covariates_mat"))
+residual_matrix <- parSapply(cl, 1:nrow(fpscore_matrix_small), run_regression_on_variant_fast) %>% t()
+stopCluster(cl)
+```
+
+```{r}
+dim(residual_matrix)
+residual_matrix[1:10, 1:10]
+```
+
+
+
+
+

@@ -1,0 +1,295 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(locuszoomr)
+library(EnsDb.Hsapiens.v86)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+
+# Make subsetted matrices for inversion region
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+dir.create("data/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+genotype_matrix <- readRDS("../../regression/genotype_matrix.Rds")
+variant_info <- readRDS("../../regression/variant_info.Rds")
+
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+
+fpscore_matrix <- readRDS(paste0(DIR, "/data/fpscore_matrix_normalized.Rds"))
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+ST_FDR5_p_thresh_with_cov <- fpscore_cov_regression %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max()
+  
+```
+
+```{r}
+variant_info_chr17_inversion <- variant_info %>%
+  dplyr::filter(variant_chrom == "chr17", variant_pos > 4.5e7, variant_pos < 4.7e7)
+
+genotype_matrix_chr17_inversion <- genotype_matrix[variant_info_chr17_inversion$variant_id, ]
+fpscore_matrix_chr17_inversion <- fpscore_matrix[variant_info_chr17_inversion$variant_id, ]
+
+fpscore_cov_regression_chr17_inversion <- fpscore_cov_regression %>%
+  dplyr::filter(variant_chrom == "chr17", variant_pos > 4.5e7, variant_pos < 4.7e7)
+
+variant_info_chr17_inversion %>% saveRDS("data/%s/variant_info_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+fpscore_matrix_chr17_inversion %>% saveRDS("data/%s/fpscore_matrix_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+genotype_matrix_chr17_inversion %>% saveRDS("data/%s/genotype_matrix_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+fpscore_cov_regression_chr17_inversion %>% saveRDS("data/%s/fpscore_cov_regression_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+```
+
+# Load subsetted matrices
+```{r}
+variant_info_chr17_inversion <- readRDS("data/%s/variant_info_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+fpscore_matrix_chr17_inversion <- readRDS("data/%s/fpscore_matrix_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+genotype_matrix_chr17_inversion <- readRDS("data/%s/genotype_matrix_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+fpscore_cov_regression_chr17_inversion <- readRDS("data/%s/fpscore_cov_regression_chr17_inversion.Rds" %>% sprintf(FP_METHOD))
+```
+
+# Load covariates and inversion genotypes
+```{r}
+regression_covariates <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/sample_covariates/regression_covariates_170.txt"))
+
+inversion_genotypes <- read.delim("data/chr17_inversion_genotypes.txt")
+
+regression_covariates <- regression_covariates %>%
+  inner_join(inversion_genotypes, by = join_by(sample_id == sample_name)) %>%
+  dplyr::rename(inversion_genotype = genotype) %>%
+  mutate(inversion_genotype = case_when(
+    inversion_genotype == "NN" ~ 0,
+    inversion_genotype == "NI" ~ 1,
+    inversion_genotype == "II" ~ 2
+  )) %>%
+  dplyr::filter(sample_id %in% colnames(fpscore_matrix_chr17_inversion)) %>%
+  arrange(match(sample_id, colnames(fpscore_matrix_chr17_inversion)))
+```
+
+```{r}
+run_regression_on_variant <- function(i, covariates = TRUE) {
+  if (i %% 1000 == 0) {
+    print(sprintf("Ran regression on %d variants", i))
+  }
+  
+  x <- genotype_matrix_chr17_inversion[i,]
+  y <- fpscore_matrix_chr17_inversion[i,]
+
+  if (covariates) {
+    model_no_int <- lm(y ~ x + regression_covariates$inversion_genotype + regression_covariates$sex +
+                           regression_covariates$batch + regression_covariates$PC1 +
+                           regression_covariates$PC2 + regression_covariates$PC3)
+    
+    model_with_int <- lm(y ~ x*regression_covariates$inversion_genotype + regression_covariates$sex +
+                             regression_covariates$batch + regression_covariates$PC1 +
+                             regression_covariates$PC2 + regression_covariates$PC3)  
+  } else {
+    model_no_int <- lm(y ~ x + regression_covariates$inversion_genotype)
+    
+    model_with_int <- lm(y ~ x*regression_covariates$inversion_genotype)
+  }
+  
+  result <- c()
+  coef_no_int <- summary(model_no_int)$coefficients
+  result["snp_beta_no_int"] <- coef_no_int[2,1]
+  result["snp_pval_no_int"] <- coef_no_int[2,4]
+  result["inversion_beta_no_int"] <- coef_no_int[3,1]
+  result["inversion_pval_no_int"] <- coef_no_int[3,4]
+  result["r_squared_no_int"] <- summary(model_no_int)$r.squared
+  
+  coef_with_int <- summary(model_with_int)$coefficients
+  result["snp_beta_with_int"] <- coef_with_int[2,1]
+  result["snp_pval_with_int"] <- coef_with_int[2,4]
+  result["inversion_beta_with_int"] <- coef_with_int[3,1]
+  result["inversion_pval_with_int"] <- coef_with_int[3,4]
+  result["snp_interaction_inversion_beta"] <- coef_with_int[nrow(coef_with_int), 1]
+  result["snp_interaction_inversion_pval"] <- coef_with_int[nrow(coef_with_int), 4]
+  
+  
+  return(result)
+}
+
+regression_result <- sapply(1:nrow(fpscore_matrix_chr17_inversion), run_regression_on_variant,
+                                covariates=TRUE)
+
+fpscore_regression_chr17_inversion <- t(regression_result) %>%
+    as.data.frame() %>%
+    mutate(variant_id = rownames(fpscore_matrix_chr17_inversion)) %>%
+    cbind(variant_info_chr17_inversion %>% dplyr::select(-variant_id))
+    
+
+# cat("Verifying that variant_ids line up in regression_results:\n")
+print(all(fpscore_regression_chr17_inversion$variant_id == variant_info_chr17_inversion$variant_id))
+
+fpscore_regression_chr17_inversion %>% 
+  write.table("data/%s/fpscore_regression_chr17_inversion.txt" %>% sprintf(FP_METHOD),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+```{r}
+fpscore_regression_chr17_inversion <- read.delim("data/%s/fpscore_regression_chr17_inversion.txt" %>% sprintf(FP_METHOD))
+```
+
+```{r fig.width=6, fig.height=4}
+pdf("figures/%s/manhattan_plots.pdf" %>% sprintf(FP_METHOD), width = 7, height = 4)
+
+fpscore_cov_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Original SNP effect, not accounting for inversion")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("SNP effect controled for inversion (no interaction term)")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(inversion_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Inversion effect controled for SNP (no interaction term)")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("SNP effect controled for inversion (with interaction term)")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(inversion_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Inversion effect controled for SNP (with interaction term)")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_interaction_inversion_pval))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Interaction between SNP and inversion")
+
+dev.off()
+```
+
+```{r fig.width=6, fig.height=6}
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = -log10(snp_pval_no_int), y = -log10(inversion_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  xlab(bquote(SNP -log[10](p))) +
+  ylab(bquote(Inversion -log[10](p))) +
+  ggtitle("No interaction term")
+
+fpscore_regression_chr17_inversion %>%
+  ggplot(aes(x = -log10(snp_pval_with_int), y = -log10(inversion_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  xlab(bquote(SNP -log[10](p))) +
+  ylab(bquote(Inversion -log[10](p))) +
+  ggtitle("With interaction term")
+```
+
+# What's up with the SNPs around 46,000,000 - are they the same in each plot?
+
+```{r}
+# The central SNPs around 46,000,000 which are significant in both the SNP pval and the inversion pval are the same SNPs
+fpscore_regression_chr17_inversion %>%
+  filter(variant_pos > 45.9e6, variant_pos < 46.1e6) %>%
+  arrange(snp_pval_no_int) %>% head(6) %>%
+  select(variant_id, variant_pos, snp_pval_no_int, inversion_pval_no_int)
+
+fpscore_regression_chr17_inversion %>%
+  filter(variant_pos > 45.9e6, variant_pos < 46.1e6) %>%
+  arrange(inversion_pval_no_int) %>% head(6) %>%
+  select(variant_id, variant_pos, snp_pval_no_int, inversion_pval_no_int)
+```
+
+
+
+# Locus gene track plots
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+fpscore_cov_regression %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+fpscore_cov_regression <- fpscore_cov_regression %>%
+  dplyr::rename(
+    SNP = variant_id,
+    CHR = variant_chrom,
+    POS = variant_pos,
+    p = pval
+  )
+
+fpscore_regression_chr17_inversion <- read.delim("data/%s/fpscore_regression_chr17_inversion.txt" %>% sprintf(FP_METHOD))
+
+fpscore_regression_chr17_inversion <- fpscore_regression_chr17_inversion %>%
+  dplyr::rename(
+    SNP = variant_id,
+    CHR = variant_chrom,
+    POS = variant_pos,
+    p = snp_pval_no_int
+  ) %>%
+  dplyr::select(SNP, CHR, POS, p)
+
+
+```
+
+
+```{r}
+chrom <- "chr17"
+xrange <- c(4.5e7, 4.7e7)
+
+# Before correcting for inversion
+fpQTL_locus_raw <- locus(data = fpscore_cov_regression, seqname = chrom, xrange = xrange,
+                         ens_db = "EnsDb.Hsapiens.v86")
+
+# After correcting for inversion
+fpQTL_locus_corrected <- locus(data = fpscore_regression_chr17_inversion, seqname = chrom, xrange = xrange,
+                         ens_db = "EnsDb.Hsapiens.v86")
+```
+
+
+
+```{r fig.height=4, fig.width=5}
+png("figures/%s/%s_gene_track_chr17_inversion.png" %>% sprintf(FP_METHOD, FP_METHOD),
+    width = 5, height = 4, units = "in", res = 600)
+oldpar <- set_layers(2, heights = c(2,2,2))
+scatter_plot(fpQTL_locus_raw, xticks = FALSE, label_x = c(4), ylab = bquote(~-log[10](p)), index_snp = NULL,
+             lwd = 0, cex = 1.4, pcutoff = ST_FDR5_p_thresh_with_cov)
+text(46.7e6, 8, "Unadjusted")
+scatter_plot(fpQTL_locus_corrected, xticks = FALSE, ylab = bquote(~-log[10](p)), index_snp = NULL,
+             lwd = 0, cex = 1.4, pcutoff = ST_FDR5_p_thresh_with_cov) 
+text(46.7e6, 6.5, "Corrected for inversion")
+genetracks(fpQTL_locus_corrected, gene_col = "grey", exon_col = "grey", exon_border = NULL,
+           filter_gene_biotype = "protein_coding")
+par(oldpar)
+dev.off()
+```
+
+
+

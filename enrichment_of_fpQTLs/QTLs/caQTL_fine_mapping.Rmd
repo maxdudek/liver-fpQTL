@@ -1,0 +1,128 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+
+fpQTLs <- read.delim("../../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR5.txt" %>% sprintf(FP_METHOD))
+```
+
+```{r}
+# Filter out chrom 17 inversion
+fpQTL_variant_ids <- fpQTLs %>%
+  filter(!(variant_chrom == "chr17" & variant_pos > 4.55e7 & variant_pos < 4.64e7)) %>%
+  pull(variant_id)
+```
+
+
+```{r}
+WINDOW <- "1mb"
+
+caQTL_credible_sets <- read.delim(sprintf("%s/raw_data/brandon_liver_ATAC/caQTL/fine_mapping/allVariants_summary_df_bw.%s.txt", ROOT_DIR, WINDOW))
+```
+
+
+```{r}
+caQTL_credible_sets_fpQTLs <- caQTL_credible_sets %>%
+  select(locus, signal, num_variants, variant_ids) %>%
+  separate_rows(variant_ids, sep = ",") %>%
+  mutate(fpQTL = variant_ids %in% fpQTL_variant_ids) %>%
+  group_by(locus, signal, num_variants) %>%
+  summarise(
+    # num_variants2 = n(), # same as num_variants
+    num_fpQTLs = sum(fpQTL)
+  ) %>%
+  ungroup()
+```
+
+```{r}
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  ggplot(aes(x = num_variants)) +
+  geom_histogram() +
+  theme_classic()
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  ggplot(aes(x = num_fpQTLs)) +
+  geom_histogram() +
+  theme_classic()
+```
+# What proportion of fpQTL-containing credible sets contain only one fpQTL?
+```{r}
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  pull(num_variants) %>%
+  mean() %>% sprintf("Average number of variants in credible sets: %.2f", .)
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  pull(num_fpQTLs) %>%
+  mean() %>% sprintf("Average number of fpQTLs in credible sets: %.2f", .)
+
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  nrow() %>% sprintf("Number of credible sets with AT LEAST 1 fpQTL: %d", .)
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs == 1) %>%
+  nrow() %>% sprintf("Number of credible sets with 1 fpQTL: %d", .)
+
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0, num_variants == 1) %>%
+  nrow() %>% sprintf("Number of credible sets with exactly 1 variant: %d", .)
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0, num_variants > 10) %>%
+  nrow() %>% sprintf("Number of credible sets more than 10 variant: %d", .)
+  
+```
+
+```{r fig.width=3, fig.height=2.7}
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  mutate(x = ifelse(num_fpQTLs < 3, as.character(num_fpQTLs), ">2") %>% factor(levels = c("1", "2", ">2"))) %>%
+  ggplot(aes(x = x)) +
+  ylab("Number of credible sets") +
+  xlab("# of fpQTLs in caQTL credible set") +
+  geom_bar(fill = "#ff7f0e") +
+  theme_classic()
+ggsave("figures/%s/num_fpQTLs_in_credible_sets_%s.png" %>% sprintf(FP_METHOD, WINDOW),
+       width = 3, height = 2.7, units = "in", dpi = 300)
+
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  mutate(x = ifelse(num_variants < 3, as.character(num_variants), ">2") %>% factor(levels = c("1", "2", ">2"))) %>%
+  ggplot(aes(x = x)) +
+  ylab("Number of credible sets") +
+  xlab("# of SNPs in caQTL credible set") +
+  geom_bar(fill = "#1f77b4") +
+  theme_classic()
+```
+
+
+```{r fig.width=3, fig.height=2.7}
+caQTL_credible_sets_fpQTLs %>%
+  filter(num_fpQTLs > 0) %>%
+  mutate(x = cut(num_variants, 
+                            breaks = c(1, 2, 11, Inf),
+                            ordered_result = TRUE, right = FALSE)) %>%
+  ggplot(aes(x = x)) +
+  ylab("Number of credible sets") +
+  xlab("# of SNPs in caQTL credible set") +
+  scale_x_discrete(labels = c("1", "2-10", ">10")) +
+  geom_bar(fill = "#1f77b4") +
+  theme_classic()
+ggsave("figures/%s/num_variants_in_credible_sets_%s.png" %>% sprintf(FP_METHOD, WINDOW),
+       width = 3, height = 2.7, units = "in", dpi = 300)
+```
+
+
+
+
+

@@ -1,0 +1,327 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm"
+```
+
+```{r}
+GWAS_DIR <- paste0(ROOT_DIR, "/raw_data/GWAS/hg38_liftover")
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+dir.create(file.path("tables", FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+fpscore_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_genotype_regression.Rds"))
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+if (grepl("local_cutsites_geq10", FP_METHOD, fixed = TRUE)) {
+  Q_THRESHOLD <- 0.10
+} else {
+  Q_THRESHOLD <- 0.05
+}
+
+fpQTL_data <- data.frame(
+  rsID = fpscore_regression$variant_id,
+  variant_chrom = fpscore_regression$variant_chrom,
+  variant_pos = fpscore_regression$variant_pos,
+  fpQTL_no_cov = fpscore_regression$ST_qval < Q_THRESHOLD,
+  fpQTL_with_cov = fpscore_cov_regression$ST_qval < Q_THRESHOLD
+)
+```
+
+Make GWAS .Rds for easier loading
+```{r}
+# sumstats_hg38 <- list()
+# sumstats_hg38[["BMI"]] <- read.delim(paste0(GWAS_DIR, "/BMI_sumstats_GIANT2018_hg38.txt.gz") %>% gzfile())
+# 
+# sumstats_hg38[["BMI"]] %>%
+#   rename(rsID = SNP) %>%
+#   select(CHR, pos_hg38, rsID, P) %>%
+#   mutate(CHR = paste0("chr", CHR)) ->
+#   sumstats_hg38[["BMI"]]
+# 
+# sumstats_hg38[["T2D"]] <- read.delim(paste0(GWAS_DIR, "/T2D_sumstats_DIAMANTE2022_hg38.txt.gz") %>% gzfile())
+# 
+# sumstats_hg38[["T2D"]] %>%
+#   dplyr::rename(CHR = chromosome.b37.,
+#                 P = Fixed.effects_p.value) %>%
+#   select(CHR, pos_hg38, rsID, P) %>%
+#   mutate(CHR = paste0("chr", CHR)) ->
+#   sumstats_hg38[["T2D"]]
+# 
+# sumstats_hg38[["lipids_LDL"]] <- 
+#   read.delim(paste0(GWAS_DIR, "/lipids_LDL_sumstats_GCST90239655_hg38.tsv.gz") %>% gzfile())
+# 
+# sumstats_hg38[["lipids_LDL"]] %>%
+#   dplyr::rename(CHR = chromosome,
+#                 rsID = variant_id,
+#                 P = p_value) %>%
+#   select(CHR, pos_hg38, rsID, P) %>%
+#   mutate(CHR = paste0("chr", CHR)) ->
+#   sumstats_hg38[["lipids_LDL"]]
+# 
+# sumstats_hg38[["lipids_TG"]] <- 
+#   read.delim(paste0(GWAS_DIR, "/lipids_TG_sumstats_GCST90239664_hg38.tsv.gz") %>% gzfile())
+# 
+# sumstats_hg38[["lipids_TG"]] %>%
+#   dplyr::rename(CHR = chromosome,
+#                 rsID = variant_id,
+#                 P = p_value) %>%
+#   select(CHR, pos_hg38, rsID, P) %>%
+#   mutate(CHR = paste0("chr", CHR)) ->
+#   sumstats_hg38[["lipids_TG"]]
+# 
+# sumstats_hg38[["NAFLD"]] <- 
+#   read.delim(paste0(GWAS_DIR, "/NAFLD_sumstats_MVP_dbGaP_hg38.txt.gz") %>% gzfile())
+# 
+# sumstats_hg38[["NAFLD"]] %>%
+#   rename(rsID = RSID) %>%
+#   select(CHR, pos_hg38, rsID, P) %>%
+#   mutate(CHR = paste0("chr", CHR)) ->
+#   sumstats_hg38[["NAFLD"]]
+# 
+# saveRDS(sumstats_hg38, file = paste0(GWAS_DIR, "/liver_sumstats_hg38.Rds"))
+```
+
+
+```{r}
+sumstats_hg38 <- readRDS(paste0(GWAS_DIR, "/liver_sumstats_hg38.Rds"))
+```
+
+Create eQTL .Rds for easy loading
+```{r}
+# eqtl_sig_vars <- read.csv(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/Liver.v8.signif_variant_gene_pairs.txt.gz") %>% gzfile(), sep="\t")
+# 
+# eqtl_all_vars <- read.csv(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/GTEx_v8_Liver_best_eQTL_per_variant.txt.gz") %>% gzfile(), sep="\t")
+# 
+# eqtl_all_vars %>%
+#   mutate(
+#     variant_chrom = paste0("chr", chr),
+#     eQTL = variant_id %in% eqtl_sig_vars$variant_id
+#   ) %>%
+#   separate(variant_id, into = c(NA, NA, "ref_allele", "alt_allele", NA), sep = "_") %>%
+#   select(gene_id, variant_chrom, variant_pos, ref_allele, alt_allele, eQTL, pval_nominal, slope) %>%
+#   group_by(variant_chrom, variant_pos) %>%
+#   filter(row_number()==1) %>%
+#   ungroup() -> # Get one row per snp
+#   eqtl_all_vars
+# 
+# eqtl_all_vars %>% saveRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/GTEx_v8_Liver_all_vars.Rds"))
+```
+
+create caQTL .Rds for easy loading
+```{r}
+# caQTL_tests <- read.csv(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/caQTL/qtl_snps_fp_score_chip_slice_minq_cut.txt.gz") %>% gzfile(), sep="\t")
+# 
+# # Rename columns for join
+# caQTL_tests %>% 
+#   dplyr::rename(
+#     variant_pos = SNP_position,
+#     caQTL_Log_10_BH_Qvalue = Log_10_BH_Qvalue,
+#     caQTL = qtl
+#   ) %>%
+#   mutate(variant_chrom = paste0("chr", Chromosome)) %>%
+#   select(Feature_ID, rs_ID, variant_chrom, variant_pos, Ref_Allele, Alt_Allele, caQTL_Log_10_BH_Qvalue, Effect_Size, caQTL) ->
+#   caQTL_tests
+# 
+# caQTL_tests %>% saveRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/caQTL/caQTL_all_vars.Rds"))
+```
+
+
+```{r}
+eqtl_all_vars <- readRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/GTEx_v8_Liver_all_vars.Rds"))
+caQTL_tests <- readRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/caQTL/caQTL_all_vars.Rds"))
+```
+
+
+# GWAS
+```{r}
+result_df <- data.frame()
+
+for (trait in names(sumstats_hg38)) {
+  print(trait)
+  sumstats_hg38[[trait]] %>%
+    mutate(sig_association = P < 5e-8) %>%
+    inner_join(fpQTL_data, by = join_by(rsID)) %>%
+    select(rsID, sig_association, fpQTL_no_cov, fpQTL_with_cov) ->
+    joined_df
+  
+  # Without covariates
+  table2x2 <- table(joined_df$sig_association, joined_df$fpQTL_no_cov)
+  rownames(table2x2) <- c("no sig", "sig association")
+  colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+  ft <- fisher.test(table2x2)
+
+  df <- data.frame(
+    fp_method = FP_METHOD,
+    trait = trait,
+    covariates = FALSE,
+    snps_neither = table2x2[1,1],
+    snps_fpQTL_only = table2x2[1,2],
+    snps_sig_only = table2x2[2,1],
+    snps_sig_and_fpQTL = table2x2[2,2],
+    odds_ratio = ft$estimate,
+    odds_ratio_95_low = ft$conf.int[1],
+    odds_ratio_95_high = ft$conf.int[2],
+    fishers_p = ft$p.value,
+    row.names = NULL
+  )
+  result_df <- rbind(result_df, df)
+
+  # With covariates
+  table2x2 <- table(joined_df$sig_association, joined_df$fpQTL_with_cov)
+  rownames(table2x2) <- c("no sig", "sig association")
+  colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+  ft <- fisher.test(table2x2)
+
+  df <- data.frame(
+    fp_method = FP_METHOD,
+    trait = trait,
+    covariates = TRUE,
+    snps_neither = table2x2[1,1],
+    snps_fpQTL_only = table2x2[1,2],
+    snps_sig_only = table2x2[2,1],
+    snps_sig_and_fpQTL = table2x2[2,2],
+    odds_ratio = ft$estimate,
+    odds_ratio_95_low = ft$conf.int[1],
+    odds_ratio_95_high = ft$conf.int[2],
+    fishers_p = ft$p.value,
+    row.names = NULL
+  )
+  result_df <- rbind(result_df, df)
+}
+
+result_df %>%
+  write.table(sprintf("tables/%s/tables_2x2_GWAS_GWsignificant.txt", FP_METHOD),
+              quote = FALSE, row.names = F, sep = "\t", )
+```
+
+eQTLs
+```{r}
+result_df_qtl <- data.frame()
+
+eqtl_all_vars %>%
+  inner_join(fpQTL_data, by = join_by(variant_chrom, variant_pos)) %>%
+    select(rsID, eQTL, fpQTL_no_cov, fpQTL_with_cov) ->
+    joined_df
+
+# Without covariates
+table2x2 <- table(joined_df$eQTL, joined_df$fpQTL_no_cov)
+rownames(table2x2) <- c("no sig", "sig association")
+colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+ft <- fisher.test(table2x2)
+
+df <- data.frame(
+  fp_method = FP_METHOD,
+  trait = "liver_eQTL",
+  covariates = FALSE,
+  snps_neither = table2x2[1,1],
+  snps_fpQTL_only = table2x2[1,2],
+  snps_sig_only = table2x2[2,1],
+  snps_sig_and_fpQTL = table2x2[2,2],
+  odds_ratio = ft$estimate,
+  odds_ratio_95_low = ft$conf.int[1],
+  odds_ratio_95_high = ft$conf.int[2],
+  fishers_p = ft$p.value,
+  row.names = NULL
+)
+result_df_qtl <- rbind(result_df_qtl, df)
+
+# With covariates
+table2x2 <- table(joined_df$eQTL, joined_df$fpQTL_with_cov)
+rownames(table2x2) <- c("no sig", "sig association")
+colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+ft <- fisher.test(table2x2)
+
+df <- data.frame(
+  fp_method = FP_METHOD,
+  trait = "liver_eQTL",
+  covariates = TRUE,
+  snps_neither = table2x2[1,1],
+  snps_fpQTL_only = table2x2[1,2],
+  snps_sig_only = table2x2[2,1],
+  snps_sig_and_fpQTL = table2x2[2,2],
+  odds_ratio = ft$estimate,
+  odds_ratio_95_low = ft$conf.int[1],
+  odds_ratio_95_high = ft$conf.int[2],
+  fishers_p = ft$p.value,
+  row.names = NULL
+)
+result_df_qtl <- rbind(result_df_qtl, df)
+
+```
+
+caQTLs
+```{r}
+caQTL_tests %>%
+  inner_join(fpQTL_data, by = join_by(variant_chrom, variant_pos)) %>%
+    select(rsID, caQTL, fpQTL_no_cov, fpQTL_with_cov) ->
+    joined_df
+
+# Without covariates
+table2x2 <- table(joined_df$caQTL, joined_df$fpQTL_no_cov)
+rownames(table2x2) <- c("no sig", "sig association")
+colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+ft <- fisher.test(table2x2)
+
+df <- data.frame(
+  fp_method = FP_METHOD,
+  trait = "liver_caQTL",
+  covariates = FALSE,
+  snps_neither = table2x2[1,1],
+  snps_fpQTL_only = table2x2[1,2],
+  snps_sig_only = table2x2[2,1],
+  snps_sig_and_fpQTL = table2x2[2,2],
+  odds_ratio = ft$estimate,
+  odds_ratio_95_low = ft$conf.int[1],
+  odds_ratio_95_high = ft$conf.int[2],
+  fishers_p = ft$p.value,
+  row.names = NULL
+)
+result_df_qtl <- rbind(result_df_qtl, df)
+
+# With covariates
+table2x2 <- table(joined_df$caQTL, joined_df$fpQTL_with_cov)
+rownames(table2x2) <- c("no sig", "sig association")
+colnames(table2x2) <- c("non-fpQTL", "fpQTL")
+ft <- fisher.test(table2x2)
+
+df <- data.frame(
+  fp_method = FP_METHOD,
+  trait = "liver_caQTL",
+  covariates = TRUE,
+  snps_neither = table2x2[1,1],
+  snps_fpQTL_only = table2x2[1,2],
+  snps_sig_only = table2x2[2,1],
+  snps_sig_and_fpQTL = table2x2[2,2],
+  odds_ratio = ft$estimate,
+  odds_ratio_95_low = ft$conf.int[1],
+  odds_ratio_95_high = ft$conf.int[2],
+  fishers_p = ft$p.value,
+  row.names = NULL
+)
+result_df_qtl <- rbind(result_df_qtl, df)
+
+result_df_qtl %>%
+  write.table(sprintf("tables/%s/tables_2x2_QTLs.txt", FP_METHOD),
+              quote = FALSE, row.names = F, sep = "\t", )
+
+```
+
+Separate 2x2 table (temporary)
+```{r}
+# tables <- read.delim("tables/tables_2x2.txt")
+# 
+# tables %>%
+#   filter(trait == "liver_eQTL" | trait == "liver_caQTL") %>%
+#   write.table("tables/tables_2x2_QTLs.txt",
+#               quote = FALSE, row.names = F, sep = "\t")
+# 
+# tables %>%
+#   filter(trait != "liver_eQTL" & trait != "liver_caQTL") %>%
+#   write.table("tables/tables_2x2_GWAS_GWsignificant.txt",
+#               quote = FALSE, row.names = F, sep = "\t")
+```
+
+
+

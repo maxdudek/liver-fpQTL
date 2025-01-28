@@ -1,0 +1,206 @@
+```{r setup, warn = FALSE, message = FALSE}
+library(tidyverse)
+library(ggnewscale)
+library(viridis)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+ldsr_results_full <- read.delim("ldsr_results.tsv")
+
+ldsr_results_full <- ldsr_results_full %>%
+  mutate(
+    Coefficient_p = 2*pnorm(abs(Coefficient_z), lower.tail = FALSE),
+    sumstats_source = ifelse(grepl("PASS_|UKB_", Trait), "alkesgroup", "curated")
+  )
+
+
+traits <- c(
+  "NAFLD", "BMI", "child_obesity", "T2D", "lipids_HDL", "lipids_LDL", 
+  "lipids_nonHDL", "lipids_TC", "lipids_TG", "hepB", "hepC",
+  "autoimmune_hep", "cirrhosis", "PB_cholangitis",
+  "DrnkWk", "AgeSmk", "CigDay", "SmkCes", "SmkInit", "height",
+  "AD", "insomnia", "glaucoma", "BIP", "SCZ", "ALT", "ALP", "GGT"
+)
+
+traits_names <- c(
+  "MASLD", "BMI", "Child Obesity", "T2D", "Lipids HDL", "Lipids LDL", 
+  "Lipids nonHDL", "Lipids TC", "Lipids TG", "hepB", "hepC",
+  "autoimmune_hep", "cirrhosis", "PB_cholangitis",
+  "DrnkWk", "AgeSmk", "CigDay", "SmkCes", "SmkInit", "height",
+  "AD", "insomnia", "glaucoma", "BIP", "SCZ", "ALT", "ALP", "GGT"
+)
+
+liver_traits <- c("BMI", "T2D", "MASLD", "ALT", "ALP", "GGT",
+                  "Lipids HDL", "Lipids LDL", "Lipids nonHDL", "Lipids TC", "Lipids TG")
+
+ldsr_results <- ldsr_results_full %>%
+  dplyr::filter(sumstats_source == "curated") %>%
+  mutate(
+    Trait = factor(Trait, levels = traits),
+    P = ifelse(Enrichment < 0, NA, P), # Negative enrichment can't be significant
+    significant = !is.na(P) & P < 0.05,
+    xmin = ifelse(Enrichment < 0, 0, Enrichment - Enrichment_std_error),
+    xmin = pmax(xmin, 0),
+    xmax = ifelse(Enrichment < 0, 0, Enrichment + Enrichment_std_error),
+    Enrichment = pmax(Enrichment, 0)
+  )
+  
+
+levels(ldsr_results$Trait) <- traits_names
+```
+
+```{r}
+ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    Annotation == "PRINT_beta_cloglog"
+  )
+```
+
+
+
+
+```{r fig.height=10, fig.width=12}
+ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    grepl("PRINT_", Annotation, fixed = TRUE),
+    Annotation != "PRINT_beta",
+    Regression_Model == "baseline",
+  ) %>%
+  mutate(Trait = factor(Trait, levels = rev(liver_traits))) %>%
+  ggplot(aes(x = Enrichment, y = Trait, color = -log10(P), 
+             size = Prop_SNPs, shape = Enrichment == 0)) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = xmin, 
+                      xmax = xmax)) +
+  geom_point(data = . %>% filter(significant), shape = "*", color = "black") + 
+  scale_shape_manual(name = "Negative\nEnrichment", values = c(16, 4)) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  coord_cartesian(xlim = c(-1, 400)) +
+  scale_x_log10() +
+  facet_wrap(~Annotation, ncol = 4) +
+  theme_bw()
+
+ggsave("figures/fpQTLs_ldsr_all.png", width = 12, height = 10, units = "in")
+```
+
+# MANUSCRIPT - Figure 4B
+```{r fig.width=5, fig.height=4.5}
+FP_METHOD <- "PRINT_beta_cloglog_FDR10"
+
+liver_traits <- c("BMI", "T2D", "MASLD", "ALT", "ALP", "GGT",
+                  "Lipids HDL", "Lipids LDL", "Lipids nonHDL", "Lipids TC", "Lipids TG")
+
+traits.name <- c("BMI", "T2D", "MASLD", "Enzymes\nALT", "Enzymes\nALP", "Enzymes\nGGT", "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG")
+
+ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    Annotation == FP_METHOD,
+    Regression_Model == "baseline",
+  ) %>%
+  mutate(Trait = factor(Trait, levels = rev(liver_traits))) %>%
+  ggplot(aes(x = Enrichment, y = Trait, color = -log10(P), shape = Enrichment == 0)) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = xmin, 
+                      xmax = xmax), size = 2) +
+  geom_point(data = . %>% filter(significant), shape = "*", color = "black") + 
+  scale_shape_manual(name = "Negative\nEnrichment", values = c(16, 4), guide = NULL) +
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  coord_cartesian(xlim = c(-1, 400)) +
+  scale_x_log10() +
+  scale_y_discrete(labels = rev(traits.name)) +
+  theme_bw()
+
+ggsave("figures/%s_ldsr_baseline_only.png" %>% sprintf(FP_METHOD), width = 5, height = 4.5, units = "in")
+```
+
+baseline including OCR enrichment
+```{r fig.width=5, fig.height=5}
+FP_METHOD <- "PRINT_beta_cloglog"
+
+liver_traits <- c("BMI", "T2D", "MASLD", "ALT", "ALP", "GGT",
+                  "Lipids HDL", "Lipids LDL", "Lipids nonHDL", "Lipids TC", "Lipids TG")
+
+traits.name <- c("BMI", "T2D", "MASLD", "Enzymes\nALT", "Enzymes\nALP", "Enzymes\nGGT", "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG")
+
+ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    Annotation %in% c(FP_METHOD, "brandon_liver_ocr"),
+    Regression_Model == "baseline",
+  ) %>%
+  mutate(Trait = factor(Trait, levels = rev(liver_traits))) %>%
+  ggplot(aes(x = Enrichment, y = Trait, color = -log10(P), group = Annotation,
+             shape = paste0(Annotation,(Enrichment == 0)))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = xmin, 
+                      xmax = xmax), size = 1.5, position = position_dodge(width=0.5)) +
+  scale_shape_manual(name = "", values = c(17, 16, 4, 4), 
+                     labels = c("ATAC-seq\npeaks", "fpQTLs", "", "")) +
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  coord_cartesian(xlim = c(-1, 400)) +
+  scale_x_log10() +
+  scale_y_discrete(labels = rev(traits.name)) +
+  theme_bw()
+
+ggsave("figures/%s_ldsr_baseline_only_vs_ocr.png" %>% sprintf(FP_METHOD), width = 5, height = 5, units = "in")
+```
+
+
+
+```{r fig.width=10, fig.height=20}
+
+ldsr_results_full %>%
+  filter(sumstats_source == "alkesgroup") %>%
+  filter(Annotation == "PRINT_no_gaussian") %>%
+  arrange(P) %>%
+  head(30) %>%
+  mutate(
+    xmin = ifelse(Enrichment < 0, 0, Enrichment - Enrichment_std_error),
+    xmin = pmax(xmin, 0),
+    xmax = ifelse(Enrichment < 0, 0, Enrichment + Enrichment_std_error),
+    Enrichment = pmax(Enrichment, 0)
+  ) %>%
+  ggplot(aes(x = Enrichment, y = Trait, color = -log10(P), shape = Enrichment == 0)) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = xmin, 
+                      xmax = xmax), size = 2) +
+  geom_point(data = . %>% filter(P < 0.05), shape = "*", color = "black") + 
+  scale_shape_manual(name = "Negative\nEnrichment", values = c(16, 4), guide = NULL) +
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  coord_cartesian(xlim = c(-1, 400)) +
+  scale_x_log10() +
+  theme_bw()
+```
+
+```{r fig.height=10, fig.width=12}
+ldsr_results %>%
+  filter(Trait %in% liver_traits) %>%
+  filter(grepl("PRINT_no_gaussian", Annotation, fixed = TRUE)) %>%
+  mutate(
+    xmin = ifelse(Enrichment < 0, 0, Enrichment - Enrichment_std_error),
+    xmin = pmax(xmin, 0),
+    xmax = ifelse(Enrichment < 0, 0, Enrichment + Enrichment_std_error),
+    Enrichment = pmax(Enrichment, 0)
+  ) %>%
+  ggplot(aes(x = Enrichment, y = Trait, color = -log10(P), 
+             size = Prop_SNPs, shape = Enrichment == 0)) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = xmin, 
+                      xmax = xmax)) +
+  geom_point(data = . %>% filter(significant), shape = "*", color = "black") + 
+  scale_shape_manual(name = "Negative\nEnrichment", values = c(16, 4)) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  scale_color_gradient(low = "gold", high = "purple") +
+  coord_cartesian(xlim = c(-1, 400)) +
+  scale_x_log10() +
+  facet_wrap(~Annotation, ncol = 4) +
+  theme_bw()
+```
+
+
+

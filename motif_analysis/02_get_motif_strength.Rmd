@@ -1,0 +1,90 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(motifmatchr)
+BiocManager::install("motifmatchr")
+BiocManager::install("TFBSTools")
+library(Biostrings)
+library(TFBSTools)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+seq.df <- readRDS("variant_seqs.Rds")
+nrow(seq.df)
+radius <- nchar(seq.df$ref_seq[1]) %/% 2
+```
+
+```{r}
+PFMs <- readJASPARMatrix(paste0(ROOT_DIR, "raw_data/JASPAR/JASPAR2022_CORE_vertebrates_non-redundant_pfms_jaspar.txt"))
+```
+
+```{r}
+ID(PFMs[[1]])
+```
+
+
+```{r}
+pfm.ids <- PFMs %>% sapply(ID)
+pfm.widths <- PFMs %>% lapply(as.matrix) %>% sapply(ncol)
+pfm.widths.unique <- pfm.widths %>% unique() %>% sort()
+```
+
+
+```{r}
+width <- 11
+pfm.subset <- PFMs[pfm.widths == width]
+
+ref_seqs <- seq.df$ref_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1))
+alt_seqs <- seq.df$alt_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1))
+```
+
+
+```{r}
+ref_motif.match <- matchMotifs(pfm.subset %>% head(10), ref_seqs %>% head(10), 
+                               genome = "hg38", bg = "genome",
+                               out = "matches", p.cutoff = 5e-4) 
+ref_motif.match <- motifMatches(ref_motif.match) %>% as.matrix()
+
+ref_motif.score <- matchMotifs(pfm.subset %>% head(10), ref_seqs %>% head(10), 
+                               genome = "hg38", bg = "genome",
+                               out = "score", p.cutoff = 1)
+ref_motif.score <- motifScores(ref_motif.score) %>% as.matrix()
+
+
+alt_motif.match <- matchMotifs(pfm.subset %>% head(10), alt_seqs %>% head(10), 
+                               genome = "hg38", bg = "genome",
+                               out = "matches", p.cutoff = 5e-4) 
+alt_motif.match <- motifMatches(alt_motif.match) %>% as.matrix()
+
+alt_motif.score <- matchMotifs(pfm.subset %>% head(10), alt_seqs %>% head(10), 
+                               genome = "hg38", bg = "genome",
+                               out = "score", p.cutoff = 1) 
+alt_motif.score <- motifScores(alt_motif.score) %>% as.matrix()
+
+```
+
+```{r}
+for (i in 1:length(pfm.subset)) {
+  pfm <- pfm.subset[[i]] 
+  motif.name <- name(pfm)
+  motif.id <- ID(pfm)
+  
+  motif.id <- paste(motif.id, motif.name, sep = "_")
+  df <- data.frame(
+    variant_id = seq.df$variant_id %>% head(nrow(ref_motif.score)),
+    ref_score = ref_motif.score[,motif.name],
+    alt_score = alt_motif.score[,motif.name],
+    ref_match = ref_motif.match[,motif.name],
+    alt_match = alt_motif.match[,motif.name]
+  ) %>%
+    mutate(delta_score = alt_score - ref_score)
+  
+  df %>% saveRDS(paste0("motif_results/", motif_id, ".Rds"))
+}
+
+```
+
+
+
+
+

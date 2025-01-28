@@ -1,0 +1,320 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+set.seed(0)
+```
+
+```{r}
+null_pvals <- readRDS("simulations/null_pvals.Rds")
+```
+
+```{r}
+N <- ncol(null_pvals[["logit"]])
+N
+```
+
+
+```{r fig.width=4, fig.height=3.3}
+links <- c("logit", "probit", "cloglog", "linear")
+links <- factor(links, levels = links)
+
+# Dummy data frame for ggplot legend
+dummy <- data.frame(x = 0, y = 0, link = links)
+
+colors <- c("logit" = "#1E56A0", "probit" = "#35b858", "cloglog" = "#FF5959", "linear" = "black")
+```
+
+
+
+```{r fig.width=4, fig.height=3.3}
+ggplot() + 
+  geom_point(data = dummy[1:3,], aes(x, y, color = link)) +
+  stat_qq(aes(sample = -log10(null_pvals[["logit"]]["pval", ])), 
+          color = colors["logit"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(null_pvals[["probit"]]["pval", ])), 
+          color = colors["probit"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(null_pvals[["cloglog"]]["pval", ])), 
+          color = colors["cloglog"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  scale_color_manual(values = colors[1:3], name = "Link\nfunction") +
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  # scale_y_continuous(breaks = 0:9) +
+  # scale_x_continuous(breaks = 0:7) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_null_QQ.png",
+       width = 4, height = 3.3, units = "in")
+```
+
+```{r fig.width=4, fig.height=3.3}
+ggplot() + 
+  geom_point(data = dummy, aes(x, y, color = link)) +
+  stat_qq(aes(sample = -log10(null_pvals[["logit"]]["pval", ])), 
+          color = colors["logit"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(null_pvals[["probit"]]["pval", ])), 
+          color = colors["probit"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(null_pvals[["cloglog"]]["pval", ])), 
+          color = colors["cloglog"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(null_pvals[["linear"]]["pval", ])), 
+          color = colors["linear"], shape = 16, alpha = 0.7,
+          distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  scale_color_manual(values = colors, name = "Link\nfunction") +
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  # scale_y_continuous(breaks = 0:9) +
+  # scale_x_continuous(breaks = 0:7) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_null_pluslinear_QQ.png",
+       width = 4, height = 3.3, units = "in")
+```
+
+# False positive rate in null simulations
+```{r}
+alpha <- seq(0.01, 0.2, by = 0.01)
+
+false_positive_rate <- data.frame()
+for (link in names(null_pvals)) {
+  fpr <- alpha %>% sapply(function(a) {sum(null_pvals[[link]]["pval",] < a) / N})
+  
+  df <- data.frame(
+    alpha = alpha,
+    fpr = fpr,
+    link = link,
+    row.names = NULL
+  )
+  
+  false_positive_rate <- rbind(false_positive_rate, df)
+}
+
+false_positive_rate <- false_positive_rate %>%
+  mutate(link = factor(link, levels = links))
+```
+
+```{r fig.width=4, fig.height=3}
+false_positive_rate %>%
+  filter(link != "linear") %>%
+  ggplot(aes(x = alpha, y = fpr, color = link)) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(values = colors[1:3], name="Link\nfunction") +
+  xlab("alpha") +
+  ylab("False-positive rate") +
+  coord_equal() +
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  xlim(c(0, 0.2)) +
+  ylim(c(0,0.2)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_null_FPR.png",
+       width = 4, height = 3, units = "in")
+```
+
+```{r fig.width=4, fig.height=3}
+false_positive_rate %>%
+  ggplot(aes(x = alpha, y = fpr, color = link)) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("alpha") +
+  ylab("False-positive rate") +
+  coord_equal() +
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  xlim(c(0, 0.2)) +
+  ylim(c(0,0.2)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_null_pluslinear_FPR.png",
+       width = 4, height = 3, units = "in")
+```
+
+
+
+# Spike-in simulations
+```{r}
+alt_pvals <- readRDS("simulations/alt_pvals.Rds")
+colors <- c("logit" = "#1E56A0", "probit" = "#35b858", "cloglog" = "#FF5959", "linear" = "black")
+```
+
+```{r}
+# Adjust betas
+logistic <- function(x) {1 / (1+exp(-x))} # inverse logit
+# inverse probit is pnorm(x)
+inv_cloglog <- function(x) {1-exp(-exp(x))} # inverse cloglog
+
+alt_pvals[["logit"]]$adj_beta <- logistic(alt_pvals[["logit"]]$beta)
+alt_pvals[["probit"]]$adj_beta <- pnorm(alt_pvals[["probit"]]$beta)
+alt_pvals[["cloglog"]]$adj_beta <- inv_cloglog(alt_pvals[["cloglog"]]$beta)
+alt_pvals[["linear"]]$adj_beta <- alt_pvals[["linear"]]$beta
+```
+
+Plot inverse functions
+```{r fig.width=5, fig.height=3}
+x <- seq(-4,4,length.out=200)
+
+df <- data.frame(
+  x = x,
+  logit = logistic(x),
+  probit = pnorm(x),
+  cloglog = inv_cloglog(x)
+) %>%
+  pivot_longer(-x, names_to = "link", values_to = "y")
+
+df %>%
+  ggplot(aes(x, y, color = link)) +
+  geom_line() +
+  scale_color_manual(values = colors) +
+  xlab(expression(beta*X)) +
+  ylab(expression(mu == g^{-1}*(beta*X))) +
+  theme_classic()
+
+```
+
+
+
+```{r}
+power_df <- alt_pvals %>%
+  bind_rows(.id = "link") %>%
+  group_by(link, spike_in_effect) %>%
+  summarise(
+    power = sum(p < 0.05/n())/n(),
+    mean_beta = mean(beta),
+    sd_beta = sd(beta),
+    mean_effect = mean(adj_beta),
+    sd_effect = sd(adj_beta)
+  ) # Bonferonni correction
+```
+
+```{r fig.width=5, fig.height=3}
+power_df %>%
+  filter(link != "linear") %>%
+  ggplot(aes(x = spike_in_effect, y = power, color = link)) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("Spike-in effect") +
+  ylab("Power") +
+  scale_x_continuous(breaks = seq(0, 0.12, 0.02)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_spike-in_power.png",
+       width = 5, height = 3, units = "in")
+```
+
+```{r fig.width=5, fig.height=3}
+power_df %>%
+  ggplot(aes(x = spike_in_effect, y = power, color = link)) +
+  geom_point() +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("Spike-in effect") +
+  ylab("Power") +
+  scale_x_continuous(breaks = seq(0, 0.12, 0.02)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_pluslinear_spike-in_power.png",
+       width = 5, height = 3, units = "in")
+```
+
+```{r}
+# Example matrix
+mat <- matrix(1:12, nrow = 4, byrow = TRUE)
+print("Original matrix:")
+print(mat)
+
+# Shuffle the values of each row
+shuffled_mat <- t(apply(mat, 1, sample))
+
+print("Matrix with shuffled rows:")
+print(shuffled_mat)
+```
+
+
+For low-powered spike-ins, do the link functions find the same SNPs?
+```{r fig.height=3, fig.width=3}
+SPIKE_IN_EFFECT <- 0.02
+N <- nrow(alt_pvals[["logit"]] %>% filter(spike_in_effect == SPIKE_IN_EFFECT))
+
+get_sig_snps <- function(x) {which(x %>% filter(spike_in_effect == SPIKE_IN_EFFECT) %>% pull(p) < 0.05/N)}
+
+sig_snps <- alt_pvals %>% lapply(get_sig_snps)
+sig_snps[["linear"]] <- NULL
+
+library(VennDiagram)
+
+invisible({
+vd <- venn.diagram(
+  x = sig_snps, category.names = names(sig_snps),
+  filename = "simulations/figures/venn/spike_in_%.2f_sig_snps_venn.png" %>% sprintf(SPIKE_IN_EFFECT), 
+  main = "Spike-in effect = %.2f" %>% sprintf(SPIKE_IN_EFFECT), main.fontfamily = "sans", main.cex = 0.6,
+  imagetype="png", height = 650,  width = 600,  resolution = 300, compression = "lzw",
+  lwd = 2, lty = 'blank', fill = colors[names(sig_snps)],
+  cex = .6, fontface = "bold", fontfamily = "sans",
+  cat.cex = 0.5, cat.fontface = "bold",
+  cat.default.pos = "outer", cat.fontfamily = "sans",
+  output=TRUE, disable.logging = TRUE
+)
+})
+```
+
+```{r fig.width=4, fig.height=4}
+
+
+```
+
+
+Effect size
+```{r fig.width=5, fig.height=3}
+power_df %>%
+  filter(link != "linear") %>%
+  ggplot(aes(x = spike_in_effect, y = mean_effect, color = link)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_effect-sd_effect, ymax = mean_effect+sd_effect), width = 0.003) +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("Spike-in effect") +
+  ylab("Estimated effect (beta)") +
+  scale_x_continuous(breaks = seq(0, 0.12, 0.02)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_spike-in_effect.png",
+       width = 5, height = 3, units = "in")
+```
+
+```{r fig.width=5, fig.height=3}
+power_df %>%
+  ggplot(aes(x = spike_in_effect, y = mean_beta, color = link)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_beta-sd_beta, ymax = mean_beta+sd_beta), width = 0.003) +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("Spike-in effect") +
+  ylab("Estimated effect (beta)") +
+  scale_x_continuous(breaks = seq(0, 0.12, 0.02)) +
+  theme_classic()
+
+ggsave("simulations/figures/beta_regression_link_pluslinear_spike-in_effect.png",
+       width = 5, height = 3, units = "in")
+```
+
+```{r fig.width=5, fig.height=3}
+power_df %>%
+  ggplot(aes(x = spike_in_effect, y = mean_effect, color = link)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_effect-sd_effect, ymax = mean_effect+sd_effect), width = 0.003) +
+  geom_line() +
+  scale_color_manual(values = colors, name="Link\nfunction") +
+  xlab("Spike-in effect") +
+  ylab("Estimated effect (beta)") +
+  scale_x_continuous(breaks = seq(0, 0.12, 0.02)) +
+  theme_classic()
+```
+

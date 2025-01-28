@@ -1,0 +1,67 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggseqlogo)
+library(stringr)
+library(Biostrings)
+```
+
+```{r}
+diff_reads.minus.end1 <- scan("seqs/diff_reads.strand-.end1.txt.gz" %>% gzfile(), character())
+```
+
+```{r}
+get_consensus_matrix
+
+pfm <- (diff_reads.minus.end1 %>% DNAStringSet() %>% consensusMatrix())[1:4,]
+
+```
+
+```{r}
+ggseqlogo(pfm, col_scheme='nucleotide')
+```
+
+
+
+
+```{r}
+filenames <- list.files("seqs", pattern="*.txt.gz", full.names=TRUE)
+ldf <- lapply(filenames %>% lapply(gzfile), scan, what = character())
+names(ldf) <- substr(filenames, 6, stop = 40) %>% str_replace(".txt.gz", "")
+```
+
+```{r}
+pfms <- list()
+for (name in names(ldf)) {
+  print(name)
+  pfm <- (ldf[[name]] %>% DNAStringSet() %>% consensusMatrix())[1:4,]
+  write.table(pfm, file = paste0("pfms/", name, ".txt"), 
+              quote = FALSE, col.names = FALSE, sep = "\t")
+  pfms[[name]] <- pfm
+}
+```
+
+```{r}
+filenames <- list.files("pfms", pattern="*.txt", full.names=TRUE)
+pfms <- lapply(filenames, read.table, row.names = 1) %>% lapply(as.matrix)
+names(pfms) <- substr(filenames, 6, stop = 40) %>% str_replace(".txt", "")
+```
+
+```{r}
+pfms$`diff_reads.strand-.end1` %>% as.matrix()
+```
+
+
+
+```{r}
+for (name in names(pfms)) {
+  print(name)
+  ggseqlogo(pfms[[name]], col_scheme='nucleotide') +
+    ggtitle(name)
+  ggsave(paste0("sequence_logos/", name, ".png"), 
+         width = 7, height = 3, bg = "white")
+}
+```
+
+
+
+

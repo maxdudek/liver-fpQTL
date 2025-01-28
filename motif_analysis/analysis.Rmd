@@ -1,0 +1,125 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qvalue)
+library(janitor)
+library(ggpubr)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+MOTIF_THRESHOLD <- "p=5e-5"
+```
+
+```{r}
+motif_matches <- readRDS(paste0("motif_match_results/", MOTIF_THRESHOLD, "/", FP_METHOD, "_motif_matches.Rds"))
+motif_summary <- read.delim(paste0("motif_summary/", MOTIF_THRESHOLD, "/", FP_METHOD, "_motif_summary.txt"))
+```
+
+```{r}
+motif_info <- read.delim("motif_summary/motif_info.txt")
+
+motifs_with_chip_data <-
+  motif_info %>%
+  filter(has_chip_data) %>%
+  pull(motif_id) %>%
+  unique()
+
+length(motifs_with_chip_data)
+```
+
+```{r}
+TFs_with_chip_data <- motif_info %>%
+  filter(has_chip_data) %>%
+  pull(TF_name) %>%
+  unique() 
+
+length(TFs_with_chip_data)
+```
+
+Filter results for motifs with ChIP data
+```{r}
+motif_summary %>%
+  filter(!is.na(TFs_with_chip_data)) %>%
+  mutate(
+    fpQTL_match_q = qvalue(fpQTL_match_p, lfdr.out = FALSE)$qvalues,
+    concordant_q = qvalue(concordant_p, lfdr.out = FALSE)$qvalues
+  ) ->
+  motif_summary_chip_only
+
+motif_matches %>%
+  filter(motif_id %in% motifs_with_chip_data) ->
+  motif_matches_chip_only
+```
+
+```{r}
+sample_results <- readRDS(paste0("motif_results/", MOTIF_THRESHOLD, "/MA1489.1_FOXN3.Rds"))
+regression_results <- readRDS(paste0("../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+variant_info <- readRDS("../regression/variant_info.Rds")
+```
+
+```{r}
+chip_peaks <- read.delim(paste0(ROOT_DIR, "raw_data/ChIP-seq/tf_clusters_liver_ENCODE/new_hg38/hg38_tf_clusters_liver_labelled.txt"))
+```
+
+```{r}
+proxy_union_GWsig <- readRDS("/mnt/isilon/sfgi/dudekm/raw_data/GWAS/sentinel_variants/snipa_LDproxies_r2=0.8_1000G_Phase3v5/proxy_union_GWsignificant/proxy_union_GWsignificant.Rds")
+```
+
+```{r}
+liver_sig_variant_gene_pairs <- read.delim("/mnt/isilon/sfgi/dudekm/raw_data/GTEx/GTEx_Analysis_v8_eQTL/Liver.v8.signif_variant_gene_pairs.txt")
+```
+
+```{r}
+concordant_fpQTLs <- read.delim(paste0("concordant_fpQTLs/", MOTIF_THRESHOLD, 
+                     "/", FP_METHOD, "_concordant_fpQTLs.txt"))
+```
+
+Match concordant fpQTLs with GWAS
+```{r}
+for (trait in names(proxy_union_GWsig)) {
+  print(trait)
+  concordant_fpQTLs[[trait]] <- 
+    (concordant_fpQTLs$variant_id %in% proxy_union_GWsig[[trait]][["rsID"]])
+}
+```
+
+
+
+Find extreme matches - rs7693992
+```{r}
+motif_info %>%
+  filter(motif_id == "MA1144.1_FOSL2::JUND" | motif_id == "MA1141.1_FOS::JUND")
+
+regression_results %>%
+  filter(variant_id == "rs7693992")
+
+chip_peaks %>%
+  filter(chrom == "chr4", chromStart <= 7462567, chromEnd >= 7462567)
+
+for (trait in names(proxy_union_GWsig)) {
+  print(trait)
+  print(proxy_union_GWsig[[trait]] %>% filter(grepl("rs7693992", rsID_alias, fixed = TRUE) | rsID == "rs7693992"))
+}
+
+liver_sig_variant_gene_pairs %>%
+  separate("variant_id", into = c("chrom", "pos", NA, NA, NA), sep = "_") %>%
+  filter(chrom == "chr4", pos == 7462567)
+
+```
+GWAS hit - rs17708638 for BMI
+```{r}
+regression_results %>%
+  filter(variant_id == "rs17708638")
+
+chip_peaks %>%
+  filter(chrom == "chr16", chromStart <= 31159853, chromEnd >= 31159853)
+
+liver_sig_variant_gene_pairs %>%
+  separate("variant_id", into = c("chrom", "pos", NA, NA, NA), sep = "_") %>%
+  filter(chrom == "chr16", pos == 31159853)
+```
+
+
+
+

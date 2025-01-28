@@ -1,0 +1,91 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+
+```{r}
+bedpe <- read.table("test_3782-BW-100.bedpe.gz" %>% gzfile())
+```
+
+```{r}
+colnames(bedpe) <- c("chr1", "start1", "end1", "chr2", "start2", "end2", 
+                     "name", "score", "strand1", "strand2")
+```
+
+```{r}
+bedpe %>%
+  mutate(
+    minus_strand = (strand1 == "-"),
+    same_region = (start1 == start2) & (end1 == end2)
+  ) %>%
+  count(minus_strand, same_region) ->
+  bedpe.count
+
+bedpe.count
+
+bedpe.count %>%
+  write.table("bedpe_count.txt", 
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+```{r}
+bedpe.count <- read.table("bedpe_count.txt", header = TRUE)
+```
+
+
+```{r}
+bedpe.count %>%
+  pull(n) %>%
+  matrix(nrow = 2,
+         dimnames = list(
+           c("different reads", "same reads"),
+           c("+", "-")
+         )) ->
+  m
+
+m %>% addmargins()
+
+(m / sum(m) * 100) %>% addmargins() %>% round(1)
+```
+
+```{r}
+bedpe %>%
+  filter(strand1 == "-" & start1 != start2)
+```
+
+```{r}
+bedpe %>%
+  filter(chr1 == chr2 & strand1 == "+" & start1 != start2) %>%
+  select(chr1, start1, end1, start2, end2) %>%
+  dplyr::rename(chr = chr1) %>%
+  write.table("fragments/diff_reads.strand+.txt.gz" %>% gzfile(),
+              row.names = FALSE, quote = FALSE, sep = "\t")
+
+bedpe %>%
+  filter(chr1 == chr2 & strand1 == "+" & start1 == start2 & end1 == end2) %>%
+  select(chr1, start1, end1) %>%
+  dplyr::rename(chr = chr1, start = start1, end = end1) %>%
+  write.table("fragments/same_reads.strand+.txt.gz" %>% gzfile(),
+              row.names = FALSE, quote = FALSE, sep = "\t")
+
+bedpe %>%
+  filter(chr1 == chr2 & strand1 == "-" & start1 != start2) %>%
+  select(chr1, start1, end1, start2, end2) %>%
+  dplyr::rename(chr = chr1) %>%
+  write.table("fragments/diff_reads.strand-.txt.gz" %>% gzfile(),
+              row.names = FALSE, quote = FALSE, sep = "\t")
+
+bedpe %>%
+  filter(chr1 == chr2 & strand1 == "-" & start1 == start2 & end1 == end2) %>%
+  select(chr1, start1, end1) %>%
+  dplyr::rename(chr = chr1, start = start1, end = end1) %>%
+  write.table("fragments/same_reads.strand-.txt.gz" %>% gzfile(),
+              row.names = FALSE, quote = FALSE, sep = "\t")
+
+
+```
+
+
+
+
+

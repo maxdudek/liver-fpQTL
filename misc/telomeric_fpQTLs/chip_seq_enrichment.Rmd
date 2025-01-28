@@ -1,0 +1,225 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+
+table(fpQTLs_telomeric$telomeric_1Mb)
+table(fpQTLs_telomeric$telomeric_2Mb)
+table(fpQTLs_telomeric$telomeric_5Mb)
+```
+
+```{r}
+chip_TFs <- fpQTLs %>%
+  filter(!is.na(liver_TF_ChIP)) %>%
+  separate_rows(liver_TF_ChIP, sep = ",") %>%
+  pull(liver_TF_ChIP) %>%
+  unique()
+
+
+```
+
+```{r}
+TELOMERIC_THRESHOLD <- 1 # in Mb
+
+for (TELOMERIC_THRESHOLD in c(1,2,5)) {
+  print(sprintf("Telomeric threshold = %d", TELOMERIC_THRESHOLD))
+  
+  t <- table(fpQTLs_telomeric[[sprintf("telomeric_%dMb", TELOMERIC_THRESHOLD)]])
+  telomeric_fpQTLs <- t["TRUE"]
+  non_telomeric_fpQTLs <- t["FALSE"]
+  
+  result <- data.frame()
+  TF <- "FOXA1"
+  for (TF in chip_TFs) {
+    print(TF)
+    
+    temp <- fpQTLs_telomeric %>%
+      filter(!is.na(liver_TF_ChIP)) %>%
+      separate_rows(liver_TF_ChIP, sep = ",") %>%
+      filter(liver_TF_ChIP == TF) 
+    
+    t <- table(temp[[sprintf("telomeric_%dMb", TELOMERIC_THRESHOLD)]])
+  
+    non_telomeric_chip_fpQTLs <- ifelse(is.na(t["FALSE"]), 0, t["FALSE"])
+    telomeric_chip_fpQTLs <- ifelse(is.na(t["TRUE"]), 0, t["TRUE"])
+    
+    
+    table2x2 <- matrix(c(non_telomeric_fpQTLs - non_telomeric_chip_fpQTLs, telomeric_fpQTLs - telomeric_chip_fpQTLs, 
+                         non_telomeric_chip_fpQTLs, telomeric_chip_fpQTLs),
+                         byrow = TRUE, nrow = 2)
+    rownames(table2x2) <- c("no chip", "chip overlap")
+    colnames(table2x2) <- c("non-telomeric", "telomeric")
+    
+    ft <- fisher.test(table2x2)
+    
+    df <- data.frame(
+      TF_name = TF,
+      covariates = TRUE,
+      non_telomeric_chip_fpQTLs = non_telomeric_chip_fpQTLs,
+      telomeric_chip_fpQTLs = telomeric_chip_fpQTLs,
+      odds_ratio = ft$estimate,
+      odds_ratio_95_low = ft$conf.int[1],
+      odds_ratio_95_high = ft$conf.int[2],
+      fishers_p = ft$p.value,
+      row.names = NULL
+    )
+    
+    result <- rbind(result, df)
+  }
+  
+  result %>%
+    write.table(sprintf("data/telomeric_%dMb_fpQTL_chip_enrichment.txt", TELOMERIC_THRESHOLD),
+                quote = FALSE, row.names = FALSE, sep = "\t")
+}
+```
+
+```{r}
+telomeric_chip_enrichment_1Mb <- read.delim("data/telomeric_1Mb_fpQTL_chip_enrichment.txt")
+telomeric_chip_enrichment_2Mb <- read.delim("data/telomeric_2Mb_fpQTL_chip_enrichment.txt")
+telomeric_chip_enrichment_5Mb <- read.delim("data/telomeric_5Mb_fpQTL_chip_enrichment.txt")
+
+telomeric_chip_enrichment_1Mb <- telomeric_chip_enrichment_1Mb %>% 
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+
+telomeric_chip_enrichment_2Mb <- telomeric_chip_enrichment_2Mb %>% 
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+
+telomeric_chip_enrichment_5Mb <- telomeric_chip_enrichment_5Mb %>% 
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+```
+
+```{r}
+telomeric_chip_enrichment_1Mb %>% arrange(fishers_p)
+telomeric_chip_enrichment_2Mb %>% arrange(fishers_p)
+telomeric_chip_enrichment_5Mb %>% arrange(fishers_p)
+```
+
+
+```{r}
+# Nothing is significant at FDR 5
+TF_order <- telomeric_chip_enrichment_1Mb %>% arrange(odds_ratio) %>% pull(TF_name)
+    
+telomeric_chip_enrichment_1Mb %>%
+  filter(fishers_p < 0.05) %>%
+  mutate(TF_name = factor(TF_name, levels = TF_order)) %>%
+  ggplot(aes(x = odds_ratio, y = TF_name, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("ChIP-seq TF") +
+  ggtitle(paste0("Enrichment of ChIP-seq peaks in fpQTLs < 1Mb from chrom end")) +
+  theme_bw()
+```
+
+```{r}
+# AGO2 is significant at FDR5
+TF_order <- telomeric_chip_enrichment_2Mb %>% arrange(odds_ratio) %>% pull(TF_name)
+    
+telomeric_chip_enrichment_2Mb %>%
+  filter(fishers_p < 0.05) %>%
+  mutate(TF_name = factor(TF_name, levels = TF_order)) %>%
+  ggplot(aes(x = odds_ratio, y = TF_name, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("ChIP-seq TF") +
+  ggtitle(paste0("Enrichment of ChIP-seq peaks in fpQTLs < 2Mb from chrom end")) +
+  theme_bw()
+```
+
+```{r}
+# Nothing is significant at FDR 5
+TF_order <- telomeric_chip_enrichment_5Mb %>% arrange(odds_ratio) %>% pull(TF_name)
+    
+telomeric_chip_enrichment_5Mb %>%
+  filter(fishers_p < 0.05) %>%
+  mutate(TF_name = factor(TF_name, levels = TF_order)) %>%
+  ggplot(aes(x = odds_ratio, y = TF_name, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("ChIP-seq TF") +
+  ggtitle(paste0("Enrichment of ChIP-seq peaks in fpQTLs < 5Mb from chrom end")) +
+  theme_bw()
+```
+
+# Draw Manhattan plot of variants that overlap AGO2 peak
+```{r}
+motif_matches_fpQTLs_AGO2 <- fpQTLs %>%
+  filter(!is.na(liver_TF_ChIP)) %>%
+  separate_rows(liver_TF_ChIP, sep = ",") %>%
+  filter(liver_TF_ChIP == "AGO2") %>%
+  pull(variant_id)
+  
+  
+png("figures/manhattan_plot_AGO2_ChIP.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = motif_matches_fpQTLs_AGO2,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+

@@ -1,0 +1,98 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(chrom = V1, chrom_length = V2)
+
+brandon_peaks <- read.table(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/peak_info/genrichAllPeaks_m10_g50_9.15.21.noBLnarrowpeak_chr.bed"))
+
+brandon_peaks <- brandon_peaks %>% 
+  dplyr::rename(chrom = V1, start = V2, end = V3) %>%
+  inner_join(chrom_lengths)
+```
+
+
+```{r}
+# Start of chrom1 - example
+df <- brandon_peaks %>%
+  filter(chrom == "chr1" & end < 1e6)
+
+range_width <- max(df$end) - min(df$start)
+
+peak_width <- sum(df$end - df$start)
+
+peak_density <- peak_width / range_width
+```
+
+```{r}
+get_peak_density <- function(chrom_, start_, end_) {
+  df <- brandon_peaks %>%
+    filter(chrom == chrom_ & start > start_, end < end_)
+  
+  range_width <- max(df$end) - min(df$start)
+  
+  peak_width <- sum(df$end - df$start)
+  
+  peak_density <- peak_width / range_width
+  
+  return(peak_density)
+}
+
+for (i in 0:10 * 1e6) {
+  print(get_peak_density("chr1", i, i+1e6))
+}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+brandon_peaks <- brandon_peaks %>% 
+  mutate(
+    mid = (start + end) %/% 2,
+    width = end - start
+  )
+```
+
+
+```{r}
+pdf(width = 10, height = 5, "figures/peak_density.pdf")
+chroms <- paste0("chr", 1:22)
+for (c in chroms) {
+  print(c)
+  print(brandon_peaks %>%
+    filter(chrom == c) %>%
+    mutate(telomeric = mid < min(mid) + 1e6 | mid > max(mid) - 1e6) %>%
+    ggplot(aes(x = mid, fill = telomeric)) +
+    geom_histogram(aes(weight = width), binwidth = 2e6) + 
+    scale_fill_manual(values = c("black", "#78d158")) +
+    theme_classic() +
+    coord_fixed(50) +
+    ggtitle(c))
+}
+dev.off()
+```
+
+```{r}
+c <- "chr1"
+brandon_peaks %>%
+    filter(chrom == c) %>%
+    mutate(telomeric = mid < min(mid) + 1e6 | mid > max(mid) - 1e6) %>%
+    ggplot(aes(x = mid, fill = telomeric)) +
+    geom_histogram(aes(weight = width), binwidth = 2e6) + 
+    scale_fill_manual(values = c("black", "green")) +
+    theme_classic() +
+    coord_fixed(50) +
+    ggtitle(c)
+```
+
+

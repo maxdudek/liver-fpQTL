@@ -1,0 +1,611 @@
+The purpose of this notebook is to figure out what's going on with significance peaks in the fpQTL manhatten plot
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(GenomicRanges)
+library(grid)
+library(gridGraphics) 
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+```
+
+```{r}
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+variant_info <- readRDS(paste0(DIR, "/data/variant_info_regression.Rds"))
+
+fpscore_cov_regression %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+fpscore_cov_regression %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  nrow()
+```
+
+Load peaks to plot
+```{r}
+brandon_peaks <- read.table(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/peak_info/genrichAllPeaks_m10_g50_9.15.21.noBLnarrowpeak_chr.bed"))
+```
+
+# The Manhattan plot
+# MANUSCRIPT - Figure 2A
+```{r fig.width=12, fig.height=6}
+png(file="figures/%s_manhattan_plot.png" %>% sprintf(FP_METHOD), 
+    width = 13, height = 6.5, units = "in", res = 600)
+fpscore_cov_regression %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            col = c("#dd960f", "#526cb0"), cex = 0.8, cex.axis = 0.9,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+
+```{r}
+# Change colors
+trace(manhattan, edit = T)
+```
+
+
+# Transparent, small manhattan plot
+```{r fig.width=6, fig.height=3}
+old.par <- par(bg=NA)
+png(file="figures/%s_manhattan_plot_transparent.png" %>% sprintf(FP_METHOD),
+    width = 600, height = 300, bg = "transparent")
+fpscore_cov_regression %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            col = c("black", "#666666"),
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+par(old.par)
+
+# p <- recordPlot()
+# g <- grid.grabExpr(grid.echo(p))
+# ggsave("figures/manhattan_plot_transparent.png", g, bg = "transparent", width = 6, height = 3, dpi = 100, units = "in")
+```
+
+
+# Export summary stats table
+```{r}
+fpscore_cov_regression %>%
+  dplyr::select(
+    variant_id, variant_chrom, variant_pos, beta, r_squared, pval,
+    ref_allele, alt_allele, genotype0_counts, genotype1_counts, genotype2_counts, maf, ST_qval
+  ) %>%
+  dplyr::rename(
+    SNP = variant_id, `Effect Size` = beta, `R2` = r_squared, P = pval,
+    CHROM = variant_chrom, POS_hg38 = variant_pos, REF = ref_allele, ALT = alt_allele, MAF = maf,
+    `N Genotype 0` = genotype0_counts, `N Genotype 1` = genotype1_counts, `N Genotype 2` = genotype2_counts, Q = ST_qval, 
+  ) %>%
+  write.table("%s_fpQTL_summary_stats.txt.gz" %>% sprintf(FP_METHOD) %>% gzfile(), 
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+
+
+# Zooming in on the spike in chr 17
+```{r}
+zoom1 <- c(4.53e7, 4.66e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+peaks <- brandon_peaks %>%
+  filter(V1 == "chr17") %>%
+  filter(V2 > zoom1[1] & V2 < zoom1[2])
+
+zoom2 <- c(4.62e7, 4.63e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 4.557e7, color = "blue", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), size = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+
+chr17_inv <- c(4.557e7, 4.63e7)
+
+zoom3 <- c(4.6259e7, 4.62619e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > zoom2[1] & variant_pos < zoom2[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom3[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom3[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), size = 2) + 
+  xlim(zoom2) +
+  theme_classic()
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() + 
+  geom_segment(data = peaks, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), size = 2) + 
+  xlim(zoom3) +
+  theme_classic()
+```
+
+# Extract cutsites
+Let's see if there's anything unusual going on with the cutsites...
+
+What chunks will we need to load?
+```{r}
+CHUNK_SIZE <- 1e5
+variants_in_region <- fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > zoom2[1] & variant_pos < zoom2[2]) %>%
+  mutate(i = match(variant_id, variant_info$variant_id))
+
+first_rs <- variants_in_region$variant_id[1]
+last_rs <- variants_in_region$variant_id[nrow(variants_in_region)]
+
+# Get variant number
+i <- match(first_rs, variant_info$variant_id)
+# Get chunk number
+chunk <- ((i-1) %/% CHUNK_SIZE) + 1
+chunk
+
+# Get variant number
+i <- match(last_rs, variant_info$variant_id)
+# Get chunk number
+chunk <- ((i-1) %/% CHUNK_SIZE) + 1
+chunk
+```
+
+Get list of samples to load
+```{r}
+genotype_matrix <- readRDS(paste0(DIR, "/data/genotype_matrix_regression.Rds"))
+samples <- colnames(genotype_matrix)
+```
+
+Extract cutsites - this code is run in extract_cutsites_chr17.R
+```{r}
+# cutsites <- data.frame()
+# for (s in samples) {
+#   print(s)
+#   countTensor <- readRDS(paste0("../../PRINT/data/", s, "/chunkedCountTensor/chunk_29.rds"))
+  
+#   for (j in 1:nrow(variants_in_region)) {
+#     # Get variant info
+#     rs <- variants_in_region$variant_id[j]
+#     i <- variants_in_region$i[j]
+#     variant_pos <- variants_in_region$variant_pos[j]
+    
+#     # Get position in chunk
+#     chunk_i <- i %% CHUNK_SIZE
+#     if (chunk_i == 0) {chunk_i <- CHUNK_SIZE} # R uses 1-indexing
+    
+#     region <- countTensor[[chunk_i]]
+    
+#     # If there are no local cutsites, add a dummy row so the sample is represented
+#     if (nrow(region) == 0) {
+#       region <- data.frame(region = i, position = 101, count = 0)
+#     }
+    
+#     if (i != region$region[1]) {
+#       cat("ERROR: variant number i =", i, "for", rs, "does not match region",
+#           region$region[1], "in chunk", chunk, "\n")
+#       break
+#     }
+    
+#     sample_cutsites <- data.frame(
+#       sample = s,
+#       position = variant_pos + region$position - 101,
+#       num_insertions = region$count,
+#       row.names = NULL
+#     )
+    
+#     cutsites <- rbind(cutsites, sample_cutsites)
+#   }
+# }
+# cutsites <- cutsites[!duplicated(cutsites),]
+# 
+# cutsites %>% saveRDS("cutsites/chr17_peak_cutsites.Rds")
+```
+
+```{r}
+cutsites <- readRDS("cutsites/chr17_peak_cutsites.Rds")
+```
+
+Which samples have the most cutsites in this region?
+```{r}
+sample_cutsites <- cutsites %>%
+  group_by(sample) %>%
+  summarize(
+    total_insertions = sum(num_insertions),
+    max_insertions = max(num_insertions)
+  )
+
+sample_cutsites %>%
+  arrange(-total_insertions)
+```
+What about the zoom3 region (where the biggest spike is)?
+```{r}
+sample_cutsites_zoom3 <- cutsites %>%
+  filter(position > zoom3[1], position < zoom3[2]) %>%
+  group_by(sample) %>%
+  summarize(
+    total_insertions = sum(num_insertions),
+    max_insertions = max(num_insertions)
+  )
+
+sample_cutsites_zoom3 %>%
+  arrange(-total_insertions)
+```
+
+```{r fig.width=10, fig.height=5}
+cutsites %>%
+  filter(sample == "3782-BW-57") %>%
+  filter(position > zoom3[1], position < zoom3[2]) %>%
+  ggplot(aes(x = position, y = num_insertions)) +
+  geom_bar(stat = "identity") +
+  xlim(zoom3) +
+  theme_classic()
+```
+
+What is the most significant variant in this region?
+```{r}
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  arrange(pval) %>% select(variant_id, pval, variant_pos)
+```
+
+# Zooming in on the spike in chr 6 (MHC)
+```{r}
+zoom1 <- c(2.8e7, 3.5e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr6") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+peaks <- brandon_peaks %>%
+  filter(V1 == "chr16") %>%
+  filter(V2 > zoom1[1] & V2 < zoom1[2])
+
+MHC <- c(28510120, 33480577) # MHC coordinates
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr6") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = MHC[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = MHC[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), size = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+```
+
+
+# Check out chromosome ends
+```{r}
+# Start of chr4
+zoom1 <- c(0, 10e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr4") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+peaks_chr4 <- brandon_peaks %>%
+  filter(V1 == "chr4")
+
+zoom2 <- c(9.1e6, 9.4e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr4") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr4, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+
+zoom3 <- c(9.235e6, 9.25e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr4") %>%
+  filter(variant_pos > zoom2[1] & variant_pos < zoom2[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom3[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom3[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr4, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom2) +
+  theme_classic()
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr4") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() + 
+  geom_segment(data = peaks_chr4, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom3) +
+  theme_classic()
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr4") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  arrange(pval)
+```
+
+```{r}
+# Start of chr5
+peaks_chr5 <- brandon_peaks %>%
+  filter(V1 == "chr5")
+
+zoom1 <- c(0, 3e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr5") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+zoom2 <- c(2e5, 3e5)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr5") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr5, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+
+zoom3 <- c(2.66e5, 2.68e5)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr5") %>%
+  filter(variant_pos > zoom2[1] & variant_pos < zoom2[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom3[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom3[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr5, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom2) +
+  theme_classic()inversion_genotypes
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr5") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() + 
+  geom_segment(data = peaks_chr5, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom3) +
+  theme_classic()
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr5") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  arrange(pval)
+```
+
+
+```{r}
+# End of chr6
+peaks_chr6 <- brandon_peaks %>%
+  filter(V1 == "chr6")
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr6") %>%
+  pull(variant_pos) %>%
+  max()
+
+zoom1 <- c(1.65e8, 170712419)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr6") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+zoom2 <- c(4.62e7, 4.63e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr6") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr6, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+```
+
+
+```{r}
+# Start of chr7
+zoom1 <- c(0, 5e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr7") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+peaks_chr7 <- brandon_peaks %>%
+  filter(V1 == "chr7")
+
+zoom2 <- c(4.62e7, 4.63e7)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr7") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +inversion_genotypes
+  geom_point() + 
+  geom_segment(data = peaks_chr7, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+```
+
+
+```{r}
+# End of chr13
+peaks_chr13 <- brandon_peaks %>%
+  filter(V1 == "chr13")
+
+zoom1 <- c(103e6, 115e6)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr13") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+zoom2 <- c(2e5, 3e5)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr13") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom2[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom2[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  geom_segment(data = peaks_chr13, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr13") %>%
+  filter(variant_pos > zoom3[1] & variant_pos < zoom3[2]) %>%
+  arrange(pval)
+```
+
+
+# 1000G Strict mask
+```{r}
+strict_mask <- read.table(paste0(ROOT_DIR, "raw_data/1000G/Strict_Mask_GRCh38_20160622.allChr.mask.bed"))
+
+strict_mask <- strict_mask %>%
+  select(V1, V2, V3) %>%
+  dplyr::rename(chrom = V1, start = V2, end = V3)
+
+strict_mask_range <- GRanges(seqnames = strict_mask$chrom, 
+                             ranges = IRanges(start = strict_mask$start, 
+                                              end = strict_mask$end))
+
+variant_range <- GRanges(seqnames = fpscore_cov_regression$variant_chrom, 
+                         ranges = IRanges(start = fpscore_cov_regression$variant_pos, 
+                                          end = fpscore_cov_regression$variant_pos))
+```
+
+```{r}
+overlaps <- GenomicRanges::findOverlaps(variant_range, 
+                                        strict_mask_range,
+                                        select = "arbitrary")
+overlaps <- as.factor(ifelse(is.na(overlaps), 0, 1))
+fpscore_cov_regression$strict_mask <- overlaps
+
+fpscore_cov_regression %>% count(strict_mask)
+```
+
+
+```{r fig.width=10, fig.height=5}
+unmasked <- fpscore_cov_regression %>% filter(strict_mask == 0) %>% pull(variant_id)
+length(unmasked)
+
+fpscore_cov_regression %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = unmasked,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+```
+
+
+# Telomeres and other gaps
+```{r}
+gaps <- read.table(paste0(ROOT_DIR, "raw_data/genome/hg38_gap.txt"))
+
+gaps <- gaps %>%
+  select(V2, V3, V4, V8) %>%
+  dplyr::rename(chrom = V2, start = V3, end = V4, type = V8)
+
+telomeres <- gaps %>% filter(type == "telomere")
+
+telomere_range <- GRanges(seqnames = telomeres$chrom, 
+                             ranges = IRanges(start = telomeres$start, 
+                                              end = telomeres$end))
+
+variant_range <- GRanges(seqnames = fpscore_cov_regression$variant_chrom, 
+                         ranges = IRanges(start = fpscore_cov_regression$variant_pos, 
+                                          end = fpscore_cov_regression$variant_pos))
+```
+
+```{r}
+overlaps <- GenomicRanges::findOverlaps(variant_range, 
+                                        telomere_range,
+                                        select = "arbitrary")
+overlaps <- as.factor(ifelse(is.na(overlaps), 0, 1))
+fpscore_cov_regression$telomeric <- overlaps
+
+fpscore_cov_regression %>% count(telomeric)
+```
+
+# Chr 8 inversion?
+```{r}
+zoom1 <- c(6300001, 12800000)
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr7") %>%
+  filter(variant_pos > 0) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") +
+  geom_point() + 
+  theme_classic()
+
+peaks_chr8 <- brandon_peaks %>%
+  filter(V1 == "chr8")
+
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr8") %>%
+  filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() + 
+  geom_segment(data = peaks_chr8, aes(x = V2, xend = V3, y = -0.5, yend = -0.5), linewidth = 2) + 
+  xlim(zoom1) +
+  theme_classic()
+```
+
+
+
+

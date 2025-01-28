@@ -1,0 +1,91 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+allelic_fragments <- read.delim("allelic_fragments.txt")
+
+allelic_fragments <- allelic_fragments %>%
+  mutate(insertion_3prime = insertion_3prime-1) %>% # Correct +4/-5 shift to +4/-4
+  pivot_longer(starts_with("insertion"), names_to = "end", values_to = "pos") %>%
+  select(-end)
+```
+
+```{r}
+fpQTLs <- read.delim("../regression/FP_methods/PRINT_no_gaussian/regression_results/fpQTLs_covariates_FDR5.txt")
+
+get_title <- function(rs) {
+  rs.info <- fpQTLs %>% filter(variant_id == rs)
+  
+  title <- paste0(rs, " (", rs.info$variant_chrom, ":", rs.info$variant_pos, "), beta = ",
+                  round(rs.info$beta, 3), ", -log10(p) = ", round(-log10(rs.info$pval), 3))
+  
+  return(title)
+}
+```
+
+```{r}
+allelic_FP_scores <- read.delim("allelic_FP_scores.txt")
+
+allelic_FP_scores <- allelic_FP_scores %>% 
+  pivot_wider(names_from = allele, values_from = FP_score, names_prefix = "FP_score_") %>%
+  select(variant_id, FP_score_ref, FP_score_alt) %>%
+  mutate(delta_allelic_fp_score = FP_score_alt - FP_score_ref) %>%
+  right_join(fpQTLs, by = join_by(variant_id == variant_id)) %>%
+  mutate(concordant = sign(beta) == sign(delta_allelic_fp_score))
+```
+
+
+
+```{r fig.height=5, fig.width=10}
+plot_allelic_insertions <- function(rs) {
+  rs_pos <- fpQTLs$variant_pos[which(fpQTLs$variant_id == rs)]
+  
+  allelic_FP_scores_rs <- allelic_FP_scores %>%
+    filter(variant_id == rs) 
+  
+  FP_score_ref <- allelic_FP_scores_rs$FP_score_ref
+  FP_score_alt <- allelic_FP_scores_rs$FP_score_alt
+
+  allelic_fragments_rs <- allelic_fragments %>%
+    filter(rsID == rs) %>%
+    mutate(relative_pos = pos - rs_pos) %>%
+    group_by(allele, relative_pos) %>%
+    summarise(insertions = sum(count)) %>%
+    mutate(allele = factor(allele, levels = c("ref", "alt")))
+  
+  levels(allelic_fragments_rs$allele) <- c( sprintf("ref FP score = %.2f", FP_score_ref), sprintf("alt FP score = %.2f", FP_score_alt) )
+  
+  if (nrow(allelic_fragments_rs) == 0) {
+    print(sprintf("WARNING: Variant %s has no fragments", rs))
+    return()
+  }
+  
+  p <- allelic_fragments_rs %>%
+    ggplot(aes(x = relative_pos, y = insertions, fill = allele)) +
+    geom_bar(stat = "identity") +
+    xlim(c(-100, 100)) +
+    facet_wrap(~allele, nrow = 2) + 
+    scale_fill_manual(values = c("#d33682", "#2aa198"), guide = "none") +
+    ggtitle(get_title(rs)) +
+    theme_classic()
+  
+  print(p)
+}
+
+plot_allelic_insertions("rs12774423")
+
+```
+
+```{r}
+pdf(width = 10, height = 5, "figures/fpQTL_allelic_insertions.pdf")
+for (i in seq_along(fpQTLs$variant_id)) {
+  rs <- fpQTLs$variant_id[i]
+  print(rs)
+  plot_allelic_insertions(rs)
+}
+dev.off()
+```
+
+

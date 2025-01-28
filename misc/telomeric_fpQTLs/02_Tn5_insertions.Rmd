@@ -1,0 +1,601 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+library(ggpubr)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+# For beta regression, join with linear effect sizes
+if (grepl("PRINT_beta", FP_METHOD, fixed = TRUE)) {
+  linear_regression <- readRDS("../../regression/FP_methods/PRINT_no_gaussian/regression_results/fp_score_covariates_genotype_regression.Rds")
+  
+  regression_results$linear_beta = linear_regression$beta
+} else {
+  regression_results$linear_beta = regression_results$beta
+}
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+```{r}
+regression_results_telomeric <- regression_results %>%
+  inner_join(chromosome_ends) %>%
+  mutate(fpQTL = ST_qval < 0.05) %>%
+  mutate(fpQTL_ = c("non-fpQTL", "fpQTL")[fpQTL + 1L]) %>%
+  mutate(fpQTL_ = factor(fpQTL_, levels = c("non-fpQTL", "fpQTL"))) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  ) %>%
+  mutate(
+    telomeric_1Mb_ = c("Non-telomeric", "Telomeric (<1 Mb)")[telomeric_1Mb + 1L],
+    telomeric_2Mb_ = c("Non-telomeric", "Telomeric (<2 Mb)")[telomeric_2Mb + 1L],
+    telomeric_5Mb_ = c("Non-telomeric", "Telomeric (<5 Mb)")[telomeric_5Mb + 1L]
+  )
+```
+
+
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+
+```
+
+```{r}
+# local_insertion_matrix <- readRDS("../../PRINT/consolidated_results/PRINT_local_insertion_matrix.Rds")
+# 
+# # Filter out MHC, etc.
+# local_insertion_matrix <- local_insertion_matrix[regression_results$variant_id, ]
+# 
+# local_insertion_matrix %>% saveRDS("../../PRINT/consolidated_results/PRINT_local_insertion_matrix_noMHC.Rds")
+```
+
+
+```{r}
+# local_insertion_matrix <- readRDS("../../PRINT/consolidated_results/PRINT_local_insertion_matrix_noMHC.Rds")
+# # Ensure order is consistent - makes joining tables much easier
+# all(rownames(local_insertion_matrix) == regression_results$variant_id)
+```
+
+```{r}
+# mean_insertion <- local_insertion_matrix %>% apply(1, mean)
+# median_insertion <- local_insertion_matrix %>% apply(1, median)
+# sd_insertion <- local_insertion_matrix %>% apply(1, sd)
+# 
+# head(mean_insertion)
+# head(median_insertion)
+# head(sd_insertion)
+# 
+# data.frame(
+#   variant_id = rownames(local_insertion_matrix),
+#   mean_insertion,
+#   median_insertion,
+#   sd_insertion,
+#   row.names = NULL
+# ) %>%
+#   saveRDS("data/local_insertion_stats.Rds")
+```
+
+```{r}
+local_insertion_stats <- readRDS("data/local_insertion_stats.Rds")
+
+# Ensure order is consistent - makes joining tables much easier
+all(local_insertion_stats$variant_id == regression_results$variant_id)
+```
+
+```{r}
+regression_results_telomeric$mean_insertion <- local_insertion_stats$mean_insertion
+regression_results_telomeric$median_insertion <- local_insertion_stats$median_insertion
+regression_results_telomeric$sd_insertion <- local_insertion_stats$sd_insertion
+```
+
+
+```{r fig.width=6, fig.height=6}
+COLORS <- c("grey", "#78d158")
+
+pdf("figures/%s/%s_Tn5_insertion_histograms.pdf" %>% sprintf(FP_METHOD, FP_METHOD), width = 6, height = 6)
+# Mean Tn5 insertion
+regression_results_telomeric %>%
+  ggplot(aes(x = mean_insertion, fill = telomeric_1Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_1Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Mean Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = mean_insertion, fill = telomeric_2Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_2Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Mean Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = mean_insertion, fill = telomeric_5Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_5Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Mean Tn5 Insertion") +
+  theme_classic()
+
+# Median Tn5 insertion
+regression_results_telomeric %>%
+  ggplot(aes(x = median_insertion, fill = telomeric_1Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_1Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Median Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = median_insertion, fill = telomeric_2Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_2Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Median Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = median_insertion, fill = telomeric_5Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_5Mb_~fpQTL_) +
+  xlim(c(0,50))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("Median Tn5 Insertion") +
+  theme_classic()
+
+
+# SD of Tn5 insertion
+regression_results_telomeric %>%
+  ggplot(aes(x = sd_insertion, fill = telomeric_1Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_1Mb_~fpQTL_) +
+  xlim(c(0,20))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("SD of Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = sd_insertion, fill = telomeric_2Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_2Mb_~fpQTL_) +
+  xlim(c(0,20))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("SD of Tn5 Insertion") +
+  theme_classic()
+
+regression_results_telomeric %>%
+  ggplot(aes(x = sd_insertion, fill = telomeric_5Mb_, alpha = fpQTL_)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30, size = 0) +
+  facet_grid(telomeric_5Mb_~fpQTL_) +
+  xlim(c(0,20))+
+  scale_fill_manual(values = COLORS, guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  xlab("SD of Tn5 Insertion") +
+  theme_classic()
+dev.off()
+```
+
+```{r fig.width=10, fig.height=5}
+df <- regression_results_telomeric %>%
+  mutate(
+    Mb1 = c("Non-telomeric", "Telomeric")[telomeric_1Mb + 1L],
+    Mb2 = c("Non-telomeric", "Telomeric")[telomeric_2Mb + 1L],
+    Mb5 = c("Non-telomeric", "Telomeric")[telomeric_5Mb + 1L]
+  ) %>%
+  dplyr::select(variant_id, starts_with("Mb"), fpQTL_, ends_with("insertion")) %>%
+  pivot_longer(cols = starts_with("Mb"), names_to = "telomere_threshold", values_to = "telomeric") %>%
+  mutate(telomere_threshold = case_when(
+    telomere_threshold == "Mb1" ~ ">1 Mb",
+    telomere_threshold == "Mb2" ~ ">2 Mb",
+    telomere_threshold == "Mb5" ~ ">5 Mb"
+  )) %>%
+  pivot_longer(cols = ends_with("insertion"), names_to = "insertion_measure", values_to = "insertion_value")
+
+df %>%
+  dplyr::filter(insertion_measure == "mean_insertion") %>%
+  ggplot(aes(x = fpQTL_, y = insertion_value, fill = telomeric, alpha = fpQTL_)) +
+  geom_boxplot() +
+  scale_fill_manual(values = COLORS, labels = c("Central", "Telomeric-\nneighboring")) +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 30)) +
+  ylab("Mean Tn5 insertion")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("MEAN Tn5 insertion, by different telomeric thresholds")
+ggsave("figures/%s/%s_Tn5_insertion_mean_boxplots.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 10, height = 5, units = "in")
+
+df %>%
+  filter(insertion_measure == "median_insertion") %>%
+  ggplot(aes(x = fpQTL_, y = insertion_value, fill = telomeric, alpha = fpQTL_)) +
+  geom_boxplot() +
+  scale_fill_manual(values = COLORS) +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 30)) +
+  ylab("Median Tn5 insertion")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("MEDIAN Tn5 insertion, by different telomeric thresholds")
+ggsave("figures/%s/%s_Tn5_insertion_median_boxplots.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 10, height = 5, units = "in")
+
+df %>%
+  filter(insertion_measure == "sd_insertion") %>%
+  ggplot(aes(x = fpQTL_, y = insertion_value, fill = telomeric, alpha = fpQTL_)) +
+  geom_boxplot() +
+  scale_fill_manual(values = COLORS) +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 20)) +
+  ylab("SD Tn5 insertion")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("SD of Tn5 insertion, by different telomeric thresholds")
+ggsave("figures/%s/%s_Tn5_insertion_sd_boxplots.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 10, height = 5, units = "in")
+```
+# ################### # 
+# SUPPLEMENTAL FIGURE # 
+# ################### #
+```{r fig.width=3.7, fig.height=3}
+COLORS <- c("grey", "#78d158")
+regression_results_telomeric %>%
+  ggplot(aes(x = fpQTL_, y = mean_insertion, fill = telomeric_2Mb_, alpha = fpQTL_)) +
+  geom_boxplot() +
+  scale_fill_manual(values = COLORS, name = NULL, labels = c("Central", "Telomeric-\nneighboring")) +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  ylim(c(0, 30)) +
+  ylab("Mean local Tn5 insertion")+
+  xlab(NULL) +
+  theme_classic()
+ggsave("figures/%s/%s_Tn5_insertion_mean_boxplots_2Mb.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 3.7, height = 3, units = "in")
+```
+
+
+
+# Statistical tests
+```{r}
+# 1 Mb
+cat("Telomeric vs. non-telomeric variants (1 Mb) MEAN insertion\n")
+x <- regression_results_telomeric %>% filter(!telomeric_1Mb) %>% pull(mean_insertion)
+y <- regression_results_telomeric %>% filter(telomeric_1Mb) %>% pull(mean_insertion)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) MEAN insertion\n")
+x <- regression_results_telomeric %>% filter(fpQTL, !telomeric_1Mb) %>% pull(mean_insertion)
+y <- regression_results_telomeric %>% filter(fpQTL, telomeric_1Mb) %>% pull(mean_insertion)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric variants (1 Mb) MEDIAN insertion\n")
+x <- regression_results_telomeric %>% filter(!telomeric_1Mb) %>% pull(median_insertion)
+y <- regression_results_telomeric %>% filter(telomeric_1Mb) %>% pull(median_insertion)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) MEDIAN insertion\n")
+x <- regression_results_telomeric %>% filter(fpQTL, !telomeric_1Mb) %>% pull(median_insertion)
+y <- regression_results_telomeric %>% filter(fpQTL, telomeric_1Mb) %>% pull(median_insertion)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric variants (1 Mb) SD insertion\n")
+x <- regression_results_telomeric %>% filter(!telomeric_1Mb) %>% pull(sd_insertion)
+y <- regression_results_telomeric %>% filter(telomeric_1Mb) %>% pull(sd_insertion)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) SD insertion\n")
+x <- regression_results_telomeric %>% filter(fpQTL, !telomeric_1Mb) %>% pull(sd_insertion)
+y <- regression_results_telomeric %>% filter(fpQTL, telomeric_1Mb) %>% pull(sd_insertion)
+t.test(x,y)
+cat("\n\n")
+```
+
+# Correlation plots
+```{r fig.width=10, fig.height=9}
+regression_results_telomeric %>%
+  # sample_frac(0.1) %>%
+  mutate(abs_effect_size = abs(linear_beta), log10p = -log10(pval)) %>%
+  select(abs_effect_size, log10p, mean_insertion, sd_insertion) %>%
+  pivot_longer(cols = ends_with("insertion"), names_to = "insertion_measure", values_to = "insertion_value") %>%
+  pivot_longer(cols = abs_effect_size:log10p, names_to = "significance_measure", values_to = "significance_value") %>%
+  mutate(
+    insertion_measure = case_when(
+      insertion_measure == "mean_insertion" ~ "Mean Insertion",
+      insertion_measure == "sd_insertion" ~ "SD of Insertion"
+    ),
+    significance_measure = case_when(
+      significance_measure == "abs_effect_size" ~ "Absolute Linear Effect Size",
+      significance_measure == "log10p" ~ "-log10(p)"
+    ),
+  ) %>%
+  ggplot(aes(x = insertion_value, y = significance_value)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_hex(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  stat_cor(method = "spearman", label.x.npc = "middle") +
+  facet_grid(significance_measure~insertion_measure, scales = "free_y") +
+  ylab(NULL) +
+  xlab(NULL) +
+  theme_bw()
+ggsave("figures/%s/%s_insertion_significance_correlation.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 10, height = 9, units = "in")
+```
+
+```{r fig.width=10, fig.height=9}
+regression_results_telomeric %>%
+  filter(fpQTL) %>%
+  mutate(abs_effect_size = abs(linear_beta), log10p = -log10(pval)) %>%
+  select(fpQTL, telomeric_1Mb, abs_effect_size, log10p, mean_insertion, sd_insertion) %>%
+  pivot_longer(cols = ends_with("insertion"), names_to = "insertion_measure", values_to = "insertion_value") %>%
+  pivot_longer(cols = abs_effect_size:log10p, names_to = "significance_measure", values_to = "significance_value") %>%
+  mutate(
+    insertion_measure = case_when(
+      insertion_measure == "mean_insertion" ~ "Mean Insertion",
+      insertion_measure == "sd_insertion" ~ "SD of Insertion"
+    ),
+    significance_measure = case_when(
+      significance_measure == "abs_effect_size" ~ "Absolute Linear Effect Size",
+      significance_measure == "log10p" ~ "-log10(p)"
+    ),
+  ) %>%
+  ggplot(aes(x = insertion_value, y = significance_value, color = telomeric_1Mb, group = 1)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_point() +
+  scale_color_manual(values = COLORS) +
+  stat_cor(method = "spearman", label.x.npc = "middle") +
+  facet_grid(significance_measure~insertion_measure, scales = "free_y") +
+  ylab(NULL) +
+  xlab(NULL) +
+  theme_bw()
+ggsave("figures/%s/%s_fpQTL_insertion_significance_correlation.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 10, height = 9, units = "in")
+```
+
+
+# ################### # 
+# SUPPLEMENTAL FIGURE # 
+# ################### #
+```{r fig.width=3, fig.height=3}
+regression_results_telomeric %>%
+  filter(fpQTL) %>%
+  mutate(abs_effect_size = abs(linear_beta), log10p = -log10(pval)) %>%
+  ggplot(aes(x = mean_insertion, y = abs_effect_size)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_point(size = 1) +
+  stat_cor(method = "spearman", label.x.npc = "middle", label.sep = "\n", size = 3) +
+  ylab("Absolute linear effect size") +
+  xlab("Mean local Tn5 insertions") +
+  theme_classic()
+ggsave("figures/%s/%s_fpQTL_mean_insertion_effect_size_correlation.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3, units = "in")
+
+regression_results_telomeric %>%
+  filter(fpQTL) %>%
+  mutate(abs_effect_size = abs(linear_beta), log10p = -log10(pval)) %>%
+  ggplot(aes(x = mean_insertion, y = log10p)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_point(size = 1) +
+  stat_cor(method = "spearman", label.x.npc = "middle", label.sep = "\n", size = 3) +
+  ylab(bquote(-log[10](p))) +
+  xlab("Mean local Tn5 insertions") +
+  theme_classic()
+ggsave("figures/%s/%s_fpQTL_mean_insertion_pval_correlation.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3, units = "in")
+```
+
+
+# Per-sample insertion analysis
+```{r}
+sample1_frags <- read.table("../../PRINT/frags/3782-BW-1.tsv")
+```
+
+Add all insertions into bins of a certain width. Are bins near the ends of chromosomes enriched for insertions?
+```{r}
+BIN_WIDTH <- 200
+
+sample1_insertions <- sample1_frags %>%
+  dplyr::rename(chrom = V1, start = V2, end = V3, count = V5) %>%
+  select(-V4) %>%
+  pivot_longer(cols = c("start", "end"), names_to = NULL, values_to = "pos") %>%
+  mutate(bin = pos %/% BIN_WIDTH)
+```
+
+```{r}
+sample1_bins_summary <- sample1_insertions %>%
+  group_by(chrom, bin) %>%
+  summarise(num_insertions = sum(count))
+
+sample1_bins_summary %>% saveRDS(sprintf("data/sample1_bins_summary_binwidth=%d.Rds", BIN_WIDTH))
+```
+
+```{r}
+BIN_WIDTH <- 200
+TELOMERIC_THRESHOLD <- 2e6 / BIN_WIDTH
+ACTUAL_TELOMERIC_THRESHOLD <- 10000 / BIN_WIDTH
+
+sample1_bins_summary <- readRDS(sprintf("data/sample1_bins_summary_binwidth=%d.Rds", BIN_WIDTH))
+
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  head(22) %>% # Filter to only autosomal chroms
+  dplyr::rename(chrom = V1, chrom_length = V2) %>%
+  mutate(last_bin = chrom_length %/% BIN_WIDTH) %>%
+  select(chrom, last_bin)
+
+sample1_bins_summary <- sample1_bins_summary %>%
+  inner_join(chrom_lengths) %>%
+  mutate(bin_end_distance = pmin(bin, last_bin-bin)) %>%
+  mutate(telomeric = bin_end_distance <= TELOMERIC_THRESHOLD)
+
+```
+
+Complete the bins (i.e. add bins with 0 insertions)
+```{r}
+complete_bins_summary <- data.frame()
+for (i in 1:nrow(chrom_lengths)) {
+  c <- chrom_lengths$chrom[i]
+  num_bins <- chrom_lengths$last_bin[i]
+  
+  nonzero_insertions <- sample1_bins_summary %>% filter(chrom == c)
+  
+  num_insertions <- rep(0, num_bins)
+  num_insertions[nonzero_insertions$bin] <- nonzero_insertions$num_insertions
+  
+  new_rows <- data.frame(
+    chrom = c,
+    bin = 1:num_bins,
+    num_insertions = num_insertions,
+    row.names = NULL
+  ) %>%
+  mutate(bin_end_distance = pmin(bin, num_bins-bin)) %>%
+  mutate(telomeric = bin_end_distance <= TELOMERIC_THRESHOLD) %>% 
+  filter(bin_end_distance >= ACTUAL_TELOMERIC_THRESHOLD) # Filter out the actual telomeres
+  
+  complete_bins_summary <- rbind(complete_bins_summary, new_rows)
+}
+complete_bins_summary
+```
+
+```{r}
+CONF_LEVEL <- 0.99
+
+non_telomeric_bins <- complete_bins_summary %>% filter(!telomeric) %>% pull(num_insertions)
+telomeric_bins <- complete_bins_summary %>% filter(telomeric) %>% pull(num_insertions)
+t.test(non_telomeric_bins, telomeric_bins)
+non_telomeric_bins_mean_CI <- t.test(non_telomeric_bins,conf.level = CONF_LEVEL)$conf.int
+telomeric_bins_mean_CI <- t.test(telomeric_bins, conf.level = CONF_LEVEL)$conf.int
+non_telomeric_bins_mean_CI
+telomeric_bins_mean_CI
+
+poisson.test(non_telomeric_bins)
+```
+
+
+
+```{r}
+COLORS <- c("black", "#78d158")
+
+sample1_bins_summary %>%
+  ggplot(aes(x = telomeric, y = num_insertions, fill = telomeric)) +
+  geom_boxplot() +
+  scale_fill_manual(values = COLORS) +
+  scale_y_log10() +
+  stat_compare_means() +
+  theme_classic() +
+  theme(legend.position = "none") +
+  ggtitle("sample 1")
+
+ggsave("figures/boxplot_test.png", width = 6, height = 6, units="in")
+```
+
+Statistical test
+```{r}
+cat("\nFull sample tests:\n")
+x <- sample1_bins_summary %>% filter(!telomeric) %>% pull(num_insertions) 
+y <- sample1_bins_summary %>% filter(telomeric) %>% pull(num_insertions) 
+cat("Mean x =", mean(x) %>% round(3), "  Mean y =", mean(y) %>% round(3), "\n")
+p <- t.test(x,y)$p.value; cat("t-test p =", p, "\n")
+p <- t.test(log10(x),log10(y))$p.value; cat("Log t-test p =", p, "\n")
+p <- wilcox.test(x,y)$p.value; cat("Wilcox p =", p, "\n")
+
+cat("\n1% downsampled tests:\n")
+x <- sample1_bins_summary %>% sample_frac(0.01) %>% filter(!telomeric) %>% pull(num_insertions) 
+y <- sample1_bins_summary %>% sample_frac(0.01) %>% filter(telomeric) %>% pull(num_insertions) 
+cat("Mean x =", mean(x) %>% round(3), "  Mean y =", mean(y) %>% round(3), "\n")
+p <- t.test(x,y)$p.value; cat("t-test p =", p, "\n")
+p <- t.test(log10(x),log10(y))$p.value; cat("Log t-test p =", p, "\n")
+p <- wilcox.test(x,y)$p.value; cat("Wilcox p =", p, "\n")
+
+cat("\n.1% downsampled tests:\n")
+x <- sample1_bins_summary %>% sample_frac(0.001) %>% filter(!telomeric) %>% pull(num_insertions) 
+y <- sample1_bins_summary %>% sample_frac(0.001) %>% filter(telomeric) %>% pull(num_insertions) 
+cat("Mean x =", mean(x) %>% round(3), "  Mean y =", mean(y) %>% round(3), "\n")
+p <- t.test(x,y)$p.value; cat("t-test p =", p, "\n")
+p <- t.test(log10(x),log10(y))$p.value; cat("Log t-test p =", p, "\n")
+p <- wilcox.test(x,y)$p.value; cat("Wilcox p =", p, "\n")
+```
+
+Correlation between end distance and insertion count
+```{r}
+x <- sample1_bins_summary %>% pull(num_insertions) 
+y <- sample1_bins_summary %>% pull(bin_end_distance) 
+t <- cor.test(x, y, method = "spearman")
+cat("Spearman correlation p =", t$p.value, "\n")
+cat("Spearman correlation rho =", t$estimate, "\n")
+```
+
+
+
+```{r}
+sample1_bins_summary %>%
+    filter(telomeric) %>%
+    ggplot(aes(x = bin_end_distance, y = num_insertions)) +
+    geom_point() +
+    xlab("Distance to chrom end (bins)") +
+    ylab("Number of insertions") +
+    scale_y_log10() +
+    theme_classic()
+  ggsave(paste0("figures/scatterplot_test.png"), 
+         width = 6, height = 6, units = "in")
+```
+
+
+
+
+

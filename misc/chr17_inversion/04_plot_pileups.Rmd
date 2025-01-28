@@ -1,0 +1,74 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(Rsamtools)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+inversion <- c(4.557e7, 4.63e7)
+```
+
+```{r}
+bam_files <- list.files("bams", "*.bam", full.names = TRUE)
+bam_names <- str_match(bam_files, ".*/(.*?)_chr17_inversion\\.bam")[,2]
+```
+
+
+```{r fig.width=7, fig.height=3}
+bam_pileup_1 <- pileup("bams/3782-BW-1_chr17_inversion.bam")
+bam_pileup_2 <- pileup("bams/3782-BW-4_chr17_inversion.bam")
+```
+
+
+```{r fig.width=7, fig.height=2}
+bam_pileup_1 %>%
+    ggplot(aes(x = pos)) +
+    geom_histogram(aes(weight = count), bins = 500, fill = "red") +
+    xlim(c(45.01e6, 45.03e6)) +
+    theme_classic()
+ggsave("figures/pileup_example1.png", width = 7, height = 2)
+
+bam_pileup_2 %>%
+    ggplot(aes(x = pos)) +
+    geom_histogram(aes(weight = count), bins = 500, fill = "red") +
+    xlim(c(45.01e6, 45.03e6)) +
+    theme_classic()
+ggsave("figures/pileup_example2.png", width = 7, height = 2)
+```
+
+
+
+```{r}
+pdf(width = 10, height = 2, file.path("figures", "chr17_inversion_pileups.pdf"))
+for (i in 1:length(bam_files)) {
+  bam_file <- bam_files[i]
+  bam_name <- bam_names[i]
+  
+  print(bam_name)
+  
+  bam_pileup <- pileup(bam_file)
+  
+  p <- bam_pileup %>%
+    ggplot(aes(x = pos)) +
+    geom_vline(xintercept = inversion[1], color = "red", linetype = "dashed") +
+    geom_vline(xintercept = inversion[2], color = "red", linetype = "dashed") +
+    geom_histogram(aes(weight = count), bins = 10000, fill = "black") +
+    ggtitle(bam_name) +
+    theme_classic()
+  
+  print(p)
+}
+dev.off()
+```
+
+
+```{r fig.width=10, fig.height=2}
+bam_pileup %>%
+  ggplot(aes(x = pos)) +
+  geom_vline(xintercept = inversion[1], color = "red", linetype = "dashed") +
+  geom_vline(xintercept = inversion[2], color = "red", linetype = "dashed") +
+  geom_histogram(aes(weight = count), bins = 10000, fill = "black") +
+  theme_classic()
+```
+
+

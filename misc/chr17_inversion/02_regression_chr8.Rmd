@@ -1,0 +1,216 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+
+# Make subsetted matrices for inversion region
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+```
+
+```{r}
+genotype_matrix <- readRDS("../../regression/genotype_matrix.Rds")
+variant_info <- readRDS("../../regression/variant_info.Rds")
+
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+
+fpscore_matrix <- readRDS(paste0(DIR, "/data/fpscore_matrix_normalized.Rds"))
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+fpscore_cov_regression %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+```
+
+```{r}
+location <- c(6300001, 12800000)
+
+variant_info_chr8_inversion <- variant_info %>%
+  filter(variant_chrom == "chr8", variant_pos > location[1], variant_pos < location[2])
+
+genotype_matrix_chr8_inversion <- genotype_matrix[variant_info_chr8_inversion$variant_id, ]
+fpscore_matrix_chr8_inversion <- fpscore_matrix[variant_info_chr8_inversion$variant_id, ]
+
+fpscore_cov_regression_chr8_inversion <- fpscore_cov_regression %>%
+  filter(variant_chrom == "chr8", variant_pos > location[1], variant_pos < location[2])
+
+variant_info_chr8_inversion %>% saveRDS("data/variant_info_chr8_inversion.Rds")
+fpscore_matrix_chr8_inversion %>% saveRDS("data/fpscore_matrix_chr8_inversion.Rds")
+genotype_matrix_chr8_inversion %>% saveRDS("data/genotype_matrix_chr8_inversion.Rds")
+fpscore_cov_regression_chr8_inversion %>% saveRDS("data/fpscore_cov_regression_chr8_inversion.Rds")
+```
+
+# Load subsetted matrices
+```{r}
+variant_info_chr8_inversion <- readRDS("data/variant_info_chr8_inversion.Rds")
+fpscore_matrix_chr8_inversion <- readRDS("data/fpscore_matrix_chr8_inversion.Rds")
+genotype_matrix_chr8_inversion <- readRDS("data/genotype_matrix_chr8_inversion.Rds")
+fpscore_cov_regression_chr8_inversion <- readRDS("data/fpscore_cov_regression_chr8_inversion.Rds")
+```
+
+# Load covariates and inversion genotypes
+```{r}
+regression_covariates <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/sample_covariates/regression_covariates_170.txt"))
+
+inversion_genotypes <- read.delim("data/chr8_inversion_genotypes.txt")
+
+regression_covariates <- regression_covariates %>%
+  inner_join(inversion_genotypes, by = join_by(sample_id == sample_name)) %>%
+  dplyr::rename(inversion_genotype = genotype) %>%
+  mutate(inversion_genotype = case_when(
+    inversion_genotype == "NN" ~ 0,
+    inversion_genotype == "NI" ~ 1,
+    inversion_genotype == "II" ~ 2
+  )) %>%
+  filter(sample_id %in% colnames(fpscore_matrix_chr8_inversion)) %>%
+  arrange(match(sample_id, colnames(fpscore_matrix_chr8_inversion)))
+```
+
+```{r}
+run_regression_on_variant <- function(i, covariates = TRUE) {
+  if (i %% 1000 == 0) {
+    print(sprintf("Ran regression on %d variants", i))
+  }
+  
+  x <- genotype_matrix_chr8_inversion[i,]
+  y <- fpscore_matrix_chr8_inversion[i,]
+
+  if (covariates) {
+    model_no_int <- lm(y ~ x + regression_covariates$inversion_genotype + regression_covariates$sex +
+                           regression_covariates$batch + regression_covariates$PC1 +
+                           regression_covariates$PC2 + regression_covariates$PC3)
+    
+    model_with_int <- lm(y ~ x*regression_covariates$inversion_genotype + regression_covariates$sex +
+                             regression_covariates$batch + regression_covariates$PC1 +
+                             regression_covariates$PC2 + regression_covariates$PC3)  
+  } else {
+    model_no_int <- lm(y ~ x + regression_covariates$inversion_genotype)
+    
+    model_with_int <- lm(y ~ x*regression_covariates$inversion_genotype)
+  }
+  
+  result <- c()
+  coef_no_int <- summary(model_no_int)$coefficients
+  result["snp_beta_no_int"] <- coef_no_int[2,1]
+  result["snp_pval_no_int"] <- coef_no_int[2,4]
+  result["inversion_beta_no_int"] <- coef_no_int[3,1]
+  result["inversion_pval_no_int"] <- coef_no_int[3,4]
+  result["r_squared_no_int"] <- summary(model_no_int)$r.squared
+  
+  coef_with_int <- summary(model_with_int)$coefficients
+  result["snp_beta_with_int"] <- coef_with_int[2,1]
+  result["snp_pval_with_int"] <- coef_with_int[2,4]
+  result["inversion_beta_with_int"] <- coef_with_int[3,1]
+  result["inversion_pval_with_int"] <- coef_with_int[3,4]
+  result["snp_interaction_inversion_beta"] <- coef_with_int[nrow(coef_with_int), 1]
+  result["snp_interaction_inversion_pval"] <- coef_with_int[nrow(coef_with_int), 4]
+  
+  
+  return(result)
+}
+
+regression_result <- sapply(1:nrow(fpscore_matrix_chr8_inversion), run_regression_on_variant,
+                                covariates=TRUE)
+
+t(regression_result) %>%
+    as.data.frame() %>%
+    mutate(variant_id = rownames(fpscore_matrix_chr8_inversion)) %>%
+    cbind(variant_info_chr8_inversion %>% select(-variant_id)) ->
+    fpscore_regression_chr8_inversion
+
+# cat("Verifying that variant_ids line up in regression_results:\n")
+print(all(fpscore_regression_chr8_inversion$variant_id == variant_info_chr8_inversion$variant_id))
+
+fpscore_regression_chr8_inversion %>% 
+  write.table("data/fpscore_regression_chr8_inversion.txt",
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+```{r}
+fpscore_regression_chr8_inversion <- read.delim("data/fpscore_regression_chr8_inversion.txt")
+```
+
+```{r fig.width=6, fig.height=4}
+pdf("figures/chr8_inversion_manhattan_plots.pdf", width = 7, height = 4)
+
+fpscore_cov_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Original SNP effect, not accounting for inversion")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("SNP effect controled for inversion (no interaction term)")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(inversion_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Inversion effect controled for SNP (no interaction term)")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("SNP effect controled for inversion (with interaction term)")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(inversion_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Inversion effect controled for SNP (with interaction term)")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = variant_pos, y = -log10(snp_interaction_inversion_pval))) +
+  geom_point() +
+  theme_classic() +
+  ylab(bquote(-log[10](p))) +
+  geom_hline(yintercept = -log10(ST_FDR5_p_thresh_with_cov), linetype = "dashed", color = "red") +
+  ggtitle("Interaction between SNP and inversion")
+
+dev.off()
+```
+
+```{r fig.width=6, fig.height=6}
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = -log10(snp_pval_no_int), y = -log10(inversion_pval_no_int))) +
+  geom_point() +
+  theme_classic() +
+  xlab(bquote(SNP -log[10](p))) +
+  ylab(bquote(Inversion -log[10](p))) +
+  ggtitle("No interaction term")
+
+fpscore_regression_chr8_inversion %>%
+  ggplot(aes(x = -log10(snp_pval_with_int), y = -log10(inversion_pval_with_int))) +
+  geom_point() +
+  theme_classic() +
+  xlab(bquote(SNP -log[10](p))) +
+  ylab(bquote(Inversion -log[10](p))) +
+  ggtitle("With interaction term")
+```
+
+
+
+
+
+
+
+
+
+

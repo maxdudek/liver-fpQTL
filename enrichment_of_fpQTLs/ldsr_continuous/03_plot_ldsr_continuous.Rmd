@@ -1,0 +1,100 @@
+```{r setup, warn = FALSE, message = FALSE}
+library(tidyverse)
+library(ggnewscale)
+library(viridis)
+library(qvalue)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+ldsr_results_full <- read.delim("ldsr_continuous_results.tsv")
+
+ldsr_results_full <- ldsr_results_full %>%
+  mutate(
+    Coefficient_p = pnorm(Coefficient_z, lower.tail = FALSE),
+    significant = Coefficient_p < 0.05,
+    sumstats_source = ifelse(grepl("PASS_|UKB_", Trait), "alkesgroup", "curated")
+  )
+
+
+traits <- c(
+  "NAFLD", "BMI", "child_obesity", "T2D", "lipids_HDL", "lipids_LDL", 
+  "lipids_nonHDL", "lipids_TC", "lipids_TG", "hepB", "hepC",
+  "autoimmune_hep", "cirrhosis", "PB_cholangitis",
+  "DrnkWk", "AgeSmk", "CigDay", "SmkCes", "SmkInit", "height",
+  "AD", "insomnia", "glaucoma", "BIP", "SCZ", "ALT", "ALP", "GGT"
+)
+
+traits_names <- c(
+  "MASLD", "BMI", "Child Obesity", "T2D", "Lipids\nHDL", "Lipids\nLDL", 
+  "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG", "hepB", "hepC",
+  "autoimmune_hep", "cirrhosis", "PB_cholangitis",
+  "DrnkWk", "AgeSmk", "CigDay", "SmkCes", "SmkInit", "height",
+  "AD", "insomnia", "glaucoma", "BIP", "SCZ", "ALT", "ALP", "GGT"
+)
+
+liver_traits <- c("BMI", "T2D", "MASLD", "ALT", "ALP", "GGT",
+                  "Lipids\nHDL", "Lipids\nLDL", "Lipids\nnonHDL", "Lipids\nTC", "Lipids\nTG")
+
+ldsr_results <- ldsr_results_full %>%
+  dplyr::filter(sumstats_source == "curated") %>%
+  mutate(
+    Trait = factor(Trait, levels = traits)
+  )
+  
+levels(ldsr_results$Trait) <- traits_names
+```
+
+
+```{r fig.width=7, fig.height=8}
+ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    grepl("_all", Annotation, fixed = TRUE)
+  ) %>%
+  mutate(
+    Trait = factor(Trait, levels = rev(liver_traits)),
+    Coefficient_q = qvalue(Coefficient_p, lambda = 0)$qvalues,
+    significant = Coefficient_q < 0.05
+  ) %>%
+  ggplot(aes(x = Coefficient, y = Trait, color = -log10(Coefficient_p))) + 
+  geom_pointrange(aes(xmax = Coefficient+Coefficient_StdErr, xmin = Coefficient-Coefficient_StdErr), size = 1) +
+  geom_vline(xintercept = 0) +
+  geom_point(data = . %>% filter(significant, -log10(Coefficient_p) > 20),  shape = "*", color = "white", size = 4) + 
+  geom_point(data = . %>% filter(significant, -log10(Coefficient_p) <= 20), shape = "*", color = "black", size = 4) + 
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  scale_x_continuous(breaks = c(0, 1e-7, 2e-7)) +
+  facet_grid(Annotation ~ Regression_Model) +
+  theme_bw()
+```
+# MANUSCRIPT - Figure 4B
+```{r fig.width=4, fig.height=4}
+FP_METHOD = "PRINT_beta_cloglog_all"
+
+df <- ldsr_results %>%
+  filter(
+    Trait %in% liver_traits,
+    Annotation == FP_METHOD,
+    Regression_Model == "ocr_baseline",
+  ) %>%
+  mutate(
+    Trait = factor(Trait, levels = rev(liver_traits)),
+    Coefficient_q = qvalue(Coefficient_p, lambda = 0)$qvalues,
+    significant = Coefficient_q < 0.05
+  ) 
+
+
+df %>%
+  ggplot(aes(x = Coefficient, y = Trait, color = -log10(Coefficient_p))) + 
+  geom_vline(xintercept = 0) +
+  geom_pointrange(aes(xmax = Coefficient+Coefficient_StdErr, xmin = Coefficient-Coefficient_StdErr), size = 1) +
+  geom_point(data = . %>% filter(significant),  shape = "*", color = "white", size = 5) + 
+  scale_color_viridis(option = "plasma", limits = c(0, NA), name = bquote(-log[10](p)), direction = -1) +
+  scale_x_continuous(breaks = c(0, 1e-7, 2e-7)) +
+  xlab("LDSR Coefficient") +
+  theme_bw()
+
+ggsave("figures/%s_ldsr_continuous_ocr_baseline.png" %>% sprintf(FP_METHOD), 
+       width = 4, height = 4, units = "in", dpi = 300)
+```
+

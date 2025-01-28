@@ -1,0 +1,466 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+fpscore_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_genotype_regression.Rds"))
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+variant_info <- readRDS(paste0(DIR, "/data/variant_info_regression.Rds"))
+
+if (grepl("local_cutsites_geq10", FP_METHOD, fixed = TRUE)) {
+  Q_THRESHOLD <- 0.10
+} else {
+  Q_THRESHOLD <- 0.05
+}
+
+fpscore_cov_regression %>%
+  filter(ST_qval < Q_THRESHOLD) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+fpQTL_data <- data.frame(
+  rsID = fpscore_regression$variant_id,
+  variant_chrom = fpscore_regression$variant_chrom,
+  variant_pos = fpscore_regression$variant_pos,
+  beta.fpQTL_no_cov = fpscore_regression$beta,
+  beta.fpQTL_with_cov = fpscore_cov_regression$beta,
+  linear_beta.fpQTL_with_cov = fpscore_cov_regression$beta,
+  fpQTL_no_cov = fpscore_regression$ST_qval < Q_THRESHOLD,
+  fpQTL_with_cov = fpscore_cov_regression$ST_qval < Q_THRESHOLD,
+  ref_allele.fpQTL = variant_info$ref_allele,
+  alt_allele.fpQTL = variant_info$alt_allele,
+  p_with_cov = fpscore_cov_regression$pval
+) %>%
+  separate(rsID, into = c("rsID", NA), sep = "_", fill = "right") # "rsXXXXXX_2" --> "rsXXXXXX"
+
+# For beta regression, join with linear effect sizes
+if (grepl("PRINT_beta", FP_METHOD, fixed = TRUE)) {
+  linear_regression <- readRDS("../../regression/FP_methods/PRINT_no_gaussian/regression_results/fp_score_covariates_genotype_regression.Rds")
+  
+  fpQTL_data$linear_beta.fpQTL_with_cov = linear_regression$beta
+
+}
+```
+
+```{r}
+eqtl_all_vars <- readRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/GTEx_v8_Liver_all_vars.Rds"))
+
+# caQTL_tests <- readRDS(paste0(ROOT_DIR, "/PMACS/bulk_human_liver_footprints/functional_variants/caQTL/caQTL_all_vars.Rds"))
+
+# caQTL_tests %>%
+#   dplyr::rename(ref_allele.caQTL = Ref_Allele, alt_allele.caQTL = Alt_Allele) ->
+#   caQTL_tests
+```
+
+```{r}
+# caQTL_tests %>%
+#   ggplot(aes(x = Effect_Size, y = -caQTL_Log_10_BH_Qvalue, color = caQTL)) +
+#   geom_point()
+```
+
+
+eQTL
+```{r}
+eQTL_fpQTL_joined <- eqtl_all_vars %>%
+  dplyr::rename(ref_allele.eQTL = ref_allele, alt_allele.eQTL = alt_allele) %>%
+  select(variant_chrom, variant_pos, ref_allele.eQTL, alt_allele.eQTL, slope, eQTL) %>%
+  inner_join(fpQTL_data, by = join_by(variant_chrom, variant_pos))
+
+# eqtl_all_vars %>%
+#   count(variant_id %in% gtex_all_vars_table$variant_id)
+
+```
+
+
+```{r}
+# Figure out which variants need to be reversed
+eQTL_fpQTL_joined %>%
+  mutate(
+    reversed = ref_allele.eQTL == alt_allele.fpQTL & ref_allele.fpQTL == alt_allele.eQTL,
+    eQTL_slope_corrected = ifelse(reversed, -slope, slope),
+    same_direction = (beta.fpQTL_with_cov > 0) == (eQTL_slope_corrected > 0)
+  ) ->
+  eQTL_fpQTL_joined
+
+eQTL_fpQTL_joined %>%
+  filter(eQTL & fpQTL_with_cov) %>%
+  count(same_direction)
+```
+
+# ```{r fig.width=5, fig.height=4}
+# eQTL_fpQTL_joined %>%
+#   # sample_frac(0.1) %>%
+#   arrange(fpQTL_with_cov, eQTL) %>%
+#   ggplot(aes(x = linear_beta.fpQTL_with_cov, y = eQTL_slope_corrected, 
+#              color = interaction(eQTL,fpQTL_with_cov),
+#              size = eQTL & fpQTL_with_cov, alpha = eQTL | fpQTL_with_cov)) +
+#   geom_point() +
+#   scale_size_manual(values = c(0.5, 1.5)) +
+#   scale_alpha_manual(values = c(0.2, 1)) +
+#   scale_color_manual(values = c("black", "#274690", "#F52974", "#A500E0"), 
+#                      labels = c("Neither", "eQTL", "fpQTL", "both"),
+#                      name = "SNP type") +
+#   xlab("fpQTL linear effect size") +
+#   ylab("eQTL effect size") +
+#   guides(size = FALSE, alpha = FALSE) +
+#   theme_classic()
+# ```
+
+```{r fig.width=3, fig.height=3.1}
+eQTL_fpQTL_joined %>%
+  filter(fpQTL_with_cov) %>%
+  ggplot(aes(x = linear_beta.fpQTL_with_cov, y = eQTL_slope_corrected, color = eQTL)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # annotate("text", 0.15, 0.7, label = "37", color = "red") + 
+  # annotate("text", 0.13, -1, label = "9", color = "red") + 
+  # annotate("text", -0.13, -1, label = "18", color = "red") + 
+  # annotate("text", -0.1, 1, label = "12", color = "red") + 
+  scale_color_manual(values = c("black", "red"), 
+                     labels = c("fpQTL", "fpQTL+eQTL"),
+                     name = "") +
+  xlab("fpQTL linear effect size") +
+  ylab("eQTL effect size") +
+  theme_classic() +
+  ylim(c(-1.7, 1.7)) +
+  theme(legend.position = "top")
+ggsave("figures/%s/%s_eQTL-fpQTL_direction.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3.1, units = "in", dpi = 300)
+
+eQTL_fpQTL_joined %>%
+  filter(fpQTL_with_cov, eQTL) %>%
+  count(linear_beta.fpQTL_with_cov > 0, eQTL_slope_corrected > 0)
+```
+
+
+caQTL
+```{r}
+caQTL_Q_threshold <- 0.0009172353
+caPeaks_all_tests <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/caQTL/fdr5_caqtl_results_all_tests.txt"))
+caQTL_SNPs <- caPeaks_all_tests %>% 
+  filter(10^Log_10_BH_Qvalue < caQTL_Q_threshold) %>% 
+  pull(rs_ID) %>% unique()
+length(caQTL_SNPs)
+
+fpQTLs_caQTL_annotated <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/caQTL/liver_caqtl_rasqual_results_max_fpqtl_overlap.withSigColumn.txt"))
+```
+
+
+```{r}
+all_variants_caQTL <- fpQTL_data %>%
+  mutate(caQTL = rsID %in% caQTL_SNPs)
+
+# Confirm that alleles are aligned
+# fpQTLs_caQTL_annotated %>% filter(REF != Ref_Allele)
+
+caQTL_fpQTL_joined <- fpQTLs_caQTL_annotated %>%
+  mutate(caQTL = sig_caQTL=="yes") %>%
+  select(rs_ID, Log_10_BH_Qvalue, Effect_Size, caQTL) %>%
+  dplyr::rename(caQTL_effect_size = Effect_Size, rsID = rs_ID) %>%
+  # select most significant test for each SNP
+  group_by(rsID) %>%
+  arrange(Log_10_BH_Qvalue, -abs(caQTL_effect_size-0.5)) %>%
+  filter(row_number() == 1) %>%
+  ungroup() %>%
+  # merge with fpQTL data
+  inner_join(fpQTL_data %>% filter(fpQTL_with_cov), by = join_by(rsID))
+
+  
+
+# caQTL_tests %>%
+#   select(variant_chrom, variant_pos, ref_allele.caQTL, alt_allele.caQTL, Effect_Size, caQTL) %>%
+#   inner_join(fpQTL_data, by = join_by(variant_chrom, variant_pos)) ->
+#   caQTL_fpQTL_joined
+```
+
+
+```{r fig.width=5, fig.height=4}
+# caQTL_fpQTL_joined %>%
+#   # sample_frac(0.1) %>%
+#   arrange(caQTL, fpQTL_with_cov) %>%
+#   ggplot(aes(x = beta.fpQTL_with_cov, y = Effect_Size, 
+#              color = interaction(caQTL,fpQTL_with_cov),
+#              size = caQTL & fpQTL_with_cov, alpha = caQTL | fpQTL_with_cov)) +
+#   geom_point() +
+#   scale_size_manual(values = c(0.5, 1.5)) +
+#   scale_alpha_manual(values = c(0.2, 1)) +
+#   scale_color_manual(values = c("black", "#274690", "#F52974", "#A500E0"), 
+#                      labels = c("Neither", "caQTL", "fpQTL", "both"),
+#                      name = "SNP type") +
+#   xlab("fpQTL effect size") +
+#   ylab("caQTL effect size") +
+#   guides(size = FALSE, alpha = FALSE) +
+#   theme_classic()
+```
+
+```{r fig.width=3, fig.height=3.1}
+caQTL_fpQTL_joined %>%
+  filter(fpQTL_with_cov) %>%
+  ggplot(aes(x = linear_beta.fpQTL_with_cov, y = caQTL_effect_size, color = caQTL)) +
+  geom_point() +
+  geom_hline(yintercept = 0.5, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # annotate("text", -0.22, 0.2, label = "157", color = "blue") + 
+  # annotate("text", -0.18, 0.7, label = "12", color = "blue") + 
+  # annotate("text", 0.1, 0.25, label = "15", color = "blue") + 
+  # annotate("text", 0.2, 0.9, label = "187", color = "blue") + 
+  scale_color_manual(values = c("black", "blue"), 
+                     labels = c("fpQTL", "fpQTL+caQTL"),
+                     name = "") +
+  xlab("fpQTL linear effect size") +
+  ylab("caQTL effect size") +
+  xlim(c(-0.334, 0.334)) +
+  ylim(c(0, 1)) +
+  theme_classic()+
+  theme(legend.position = "top")
+ggsave("figures/%s/%s_caQTL-fpQTL_direction.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3.1, units = "in", dpi = 300)
+
+caQTL_fpQTL_joined %>%
+  arrange(-linear_beta.fpQTL_with_cov)
+
+caQTL_fpQTL_joined %>%
+  filter(fpQTL_with_cov, caQTL) %>%
+  count(linear_beta.fpQTL_with_cov > 0, caQTL_effect_size > 0.5)
+```
+
+
+# QQ plots
+```{r}
+eqtl_sig_pairs <- read.delim(paste0(ROOT_DIR, "raw_data/GTEx/GTEx_Analysis_v8_eQTL/Liver.v8.signif_variant_gene_pairs.txt"))
+gtex_all_vars_table <- read.delim(paste0(ROOT_DIR, "raw_data/GTEx/GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.location.txt"))
+
+GTEx_tested_SNPs <- gtex_all_vars_table %>%
+  mutate(variant_location = sprintf("%s:%d", chr, variant_pos)) %>%
+  pull(variant_location)
+
+eQTL_SNPs <- eqtl_sig_pairs %>%
+  separate(variant_id, into = c("chrom", "pos", NA, NA, NA), sep = "_") %>%
+  mutate(variant_location = sprintf("%s:%s", chrom, pos)) %>%
+  pull(variant_location)
+```
+
+```{r fig.width=3, fig.height=3}
+ggplot() + 
+  stat_qq(aes(sample = -log10(fpscore_cov_regression$pval)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave("figures/%s/%s_QQ.png" %>% sprintf(FP_METHOD, FP_METHOD), width = 3, height = 3, dpi = 300)
+```
+
+
+
+```{r fig.width=3, fig.height=3}
+df <- fpQTL_data %>%
+  mutate(variant_location = sprintf("%s:%d", variant_chrom, variant_pos)) %>%
+  filter(variant_location %in% GTEx_tested_SNPs) %>%
+  mutate(eQTL = variant_location %in% eQTL_SNPs)
+
+eQTL_p <- df %>%
+  # sample_frac(0.1) %>%
+  filter(eQTL) %>%
+  pull(p_with_cov) 
+
+non_eQTL_p <- df %>%
+  # sample_frac(0.1) %>%
+  filter(!eQTL) %>%
+  pull(p_with_cov) 
+  
+ggplot() + 
+  stat_qq(aes(sample = -log10(non_eQTL_p)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(eQTL_p)), 
+          color = "red", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave("figures/%s/%s_eQTL_QQ.png" %>% sprintf(FP_METHOD, FP_METHOD),
+       width = 3, height = 3, units = "in", dpi = 300)
+```
+
+
+```{r fig.width=3, fig.height=3}
+caQTL_p <- all_variants_caQTL %>%
+  # sample_frac(0.1) %>%
+  filter(caQTL) %>%
+  pull(p_with_cov) 
+
+non_caQTL_p <- all_variants_caQTL %>%
+  # sample_frac(0.1) %>%
+  filter(!caQTL) %>%
+  pull(p_with_cov) 
+  
+ggplot() + 
+  stat_qq(aes(sample = -log10(non_caQTL_p)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  stat_qq(aes(sample = -log10(caQTL_p)), 
+          color = "blue", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave("figures/%s/%s_caQTL_QQ.png" %>% sprintf(FP_METHOD, FP_METHOD),
+       width = 3, height = 3, units = "in", dpi = 300)
+```
+
+# Manhattan plots 
+```{r}
+eqtl_all_vars %>%
+  select(variant_chrom, variant_pos, ref_allele.eQTL, alt_allele.eQTL, slope, eQTL, gene_id) %>%
+  right_join(fpQTL_data, by = join_by(variant_chrom, variant_pos)) ->
+  eQTL_fpQTL_right_joined
+
+eQTL_fpQTL_right_joined %>% count(eQTL)
+
+caQTL_tests %>%
+  select(variant_chrom, variant_pos, ref_allele.caQTL, alt_allele.caQTL, Effect_Size, caQTL) %>%
+  right_join(fpQTL_data, by = join_by(variant_chrom, variant_pos)) ->
+  caQTL_fpQTL_right_joined
+
+caQTL_fpQTL_right_joined %>% count(caQTL)
+```
+
+
+```{r fig.height=8, fig.width=13}
+eQTL_IDs <- eQTL_fpQTL_right_joined %>% filter(eQTL) %>% pull(rsID)
+length(eQTL_IDs)
+
+png("figures/%s/%s_eQTL_manhattan_plot.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+    width = 13, height = 8, units = "in", res=300)
+eQTL_fpQTL_right_joined %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "rsID", p = "p_with_cov",
+            highlight = eQTL_IDs,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+```
+
+```{r fig.height=8, fig.width=13}
+caQTL_IDs <- caQTL_fpQTL_right_joined %>% filter(caQTL) %>% pull(rsID)
+length(caQTL_IDs)
+
+png("figures/%s/%s_caQTL_manhattan_plot.png" %>% sprintf(FP_METHOD, FP_METHOD),
+    width = 13, height = 8, units = "in", res=300)
+caQTL_fpQTL_right_joined %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "rsID", p = "p_with_cov",
+            highlight = caQTL_IDs,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+```
+
+<!-- # Chr 17 inversion -->
+<!-- ```{r fig.width=12, fig.height=8} -->
+<!-- zoom1 <- c(4.53e7, 4.66e7) -->
+<!-- eQTL_fpQTL_right_joined %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > 0) %>% -->
+<!--   ggplot(aes(x = variant_pos, y = -log10(p_with_cov), color = eQTL)) + -->
+<!--   geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") + -->
+<!--   geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") + -->
+<!--   geom_point() +  -->
+<!--   scale_color_manual(values = c("black", "red")) +  -->
+<!--   theme_classic() -->
+
+<!-- eQTL_fpQTL_right_joined %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>% -->
+<!--   ggplot(aes(x = variant_pos, y = -log10(p_with_cov), color = eQTL)) + -->
+<!--   geom_point() +  -->
+<!--   scale_color_manual(values = c("black", "red")) +  -->
+<!--   xlim(zoom1) + -->
+<!--   theme_classic() -->
+<!-- ggsave("figures/chr17_inversion_eQTL_manhattan.png", width = 12, height = 8) -->
+
+<!-- eQTL_fpQTL_right_joined %>% -->
+<!--   filter(eQTL) %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>% -->
+<!--   ggplot(aes(x = variant_pos, y = -log10(p_with_cov), color = gene_id)) + -->
+<!--   geom_point() +  -->
+<!--   xlim(zoom1) + -->
+<!--   theme_classic() -->
+<!-- ggsave("figures/chr17_inversion_egene_manhattan.png", width = 12, height = 8) -->
+
+<!-- eQTL_fpQTL_right_joined %>% -->
+<!--   filter(eQTL) %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>% -->
+<!--   count(gene_id) %>% -->
+<!--   arrange(-n) -->
+<!-- ``` -->
+
+<!-- ```{r fig.width=12, fig.height=8} -->
+<!-- zoom1 <- c(4.53e7, 4.66e7) -->
+<!-- caQTL_fpQTL_right_joined %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > 0) %>% -->
+<!--   ggplot(aes(x = variant_pos, y = -log10(p_with_cov), color = caQTL)) + -->
+<!--   geom_vline(xintercept = zoom1[1], color = "red", linetype = "dashed") + -->
+<!--   geom_vline(xintercept = zoom1[2], color = "red", linetype = "dashed") + -->
+<!--   geom_point() +  -->
+<!--   scale_color_manual(values = c("black", "blue")) +  -->
+<!--   theme_classic() -->
+
+<!-- caQTL_fpQTL_right_joined %>% -->
+<!--   filter(variant_chrom == "chr17") %>% -->
+<!--   filter(variant_pos > zoom1[1] & variant_pos < zoom1[2]) %>% -->
+<!--   ggplot(aes(x = variant_pos, y = -log10(p_with_cov), color = caQTL)) + -->
+<!--   geom_point() +  -->
+<!--   scale_color_manual(values = c("black", "blue")) +  -->
+<!--   xlim(zoom1) + -->
+<!--   theme_classic() -->
+<!-- ggsave("figures/chr17_inversion_caQTL_manhattan.png", width = 12, height = 8) -->
+<!-- ``` -->
+
+<!-- # Manhattan plot of eQTL pvalues -->
+<!-- ```{r} -->
+<!-- eQTL_signif_variant_gene_pairs <- readRDS(paste0(ROOT_DIR, "raw_data/GTEx/Liver.v8.signif_variant_gene_pairs.hg38.names.Rds")) -->
+
+<!-- eQTL_signif_variant_gene_pairs_sum <- eQTL_signif_variant_gene_pairs %>% -->
+<!--   mutate(variant_id = paste(variant_chrom, variant_pos, sep = ":")) %>% -->
+<!--   mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>% -->
+<!--   group_by(variant_id) %>% -->
+<!--   summarise( -->
+<!--     variant_chrom = first(variant_chrom), -->
+<!--     variant_pos = first(variant_pos), -->
+<!--     min_pval = min(pval_nominal), -->
+<!--     .groups = "drop" -->
+<!--   ) -->
+<!-- ``` -->
+
+<!-- ```{r fig.width=13, fig.height=8} -->
+<!-- png("figures/eQTL_expression_pval_manhattan_plot.png", width = 13, height = 8, units = "in", res=300) -->
+<!-- eQTL_signif_variant_gene_pairs_sum %>% -->
+<!--   drop_na() %>% -->
+<!--   manhattan(chr = "variant_chrom", bp = "variant_pos",  -->
+<!--             p = "min_pval", snp = "variant_id", -->
+<!--             col = c("dark red", "dark green"), -->
+<!--             suggestiveline = FALSE, genomewideline = FALSE -->
+<!--             ) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+
+ 

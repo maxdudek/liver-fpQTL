@@ -1,0 +1,74 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+Just a test space for the corresponding .R script
+```{r}
+rowSums(!is.na(fpscore_matrix)) ->
+  numSamplesPerVariantWithData
+
+numSamplesPerVariantWithData %>%
+  data.frame() %>%
+  ggplot(aes(x = .)) +
+  geom_bar(color = "black") +
+  xlab("Number of samples with data") +
+  labs(title = "How many samples does each variant have data for?") +
+  theme_classic()
+```
+
+```{r}
+variant_info %>%
+  mutate(num_genotypes = as.integer(N_regression_genotype0 != 0) + 
+                         as.integer(N_regression_genotype1 != 0) +
+                         as.integer(N_regression_genotype2 != 0))
+```
+
+```{r}
+sample_completeness %>%
+  ggplot(aes(x = num_variants_with_data)) +
+  geom_histogram(bins=15, fill = "black") +
+  xlab("Number of variants with data") +
+  labs(title = "How many variants does each sample have data for?") +
+  theme_classic()
+```
+
+```{r}
+variant_completeness %>%
+  ggplot(aes(x = num_samples_with_data)) +
+  geom_bar(color = "black") +
+  xlab("Number of samples with data") +
+  labs(title = "How many samples does each variant have data for?") +
+  theme_classic()
+```
+
+```{r}
+variant_completeness %>%
+  filter(variant_chrom == "chr21") %>%
+  ggplot(aes(x = variant_pos, y = num_samples_with_data)) +
+  geom_point(size = 0.1) +
+  theme_classic()
+```
+
+```{r}
+fpscore_rows_df %>%
+  ggplot(aes(x = fp_score)) +
+  geom_histogram(bins = 200) +
+  xlim(fpscore.xlim)
+```
+
+```{r fig.width = 16, fig.height = 12}
+fpscore_rows_df %>%
+  sample_frac(0.01) %>%
+  ggplot(aes(x = fp_score)) +
+  geom_histogram(bins = 100) +
+  xlim(fpscore.xlim) +
+  facet_wrap(~sample_id) +
+  theme_classic()
+```
+
+
+
+
+
+
+

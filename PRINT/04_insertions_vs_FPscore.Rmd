@@ -1,0 +1,187 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(santoku)
+library(GenomicRanges)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+Load FP score + local insertion matrix
+```{r}
+fpscore_matrix <- readRDS("consolidated_results/PRINT_fpscore_matrix.Rds")
+local_insertion_matrix <- readRDS("consolidated_results/PRINT_local_insertion_matrix.Rds")
+```
+
+Ensure order is same for both matrices
+```{r}
+all(rownames(fpscore_matrix) == rownames(local_insertion_matrix))
+all(colnames(fpscore_matrix) == colnames(local_insertion_matrix))
+```
+
+```{r}
+df <- data.frame(
+  fpscore = c(fpscore_matrix),
+  local_insertion = c(local_insertion_matrix)
+) %>%
+  filter(local_insertion >= 1) %>%
+  mutate(insertion_quintile = chop_equally(local_insertion, groups=5, labels = lbl_discrete()))
+```
+
+
+```{r fig.width=5, fig.height=5}
+df %>%
+  sample_frac(0.1) %>%
+  ggplot(aes(x = insertion_quintile, y = fpscore, fill = insertion_quintile)) +
+  geom_boxplot(outlier.shape = NA) +
+  # scale_x_discrete(labels=as.character(1:5)) +
+  theme_classic() +
+  ylab("FP score") +
+  xlab("Local insertions (quintile)") +
+  ylim(c(0, 0.5)) +
+  theme(legend.position = "none")
+
+ggsave("figures/local_insertion_quintile_vs_fpscore.png", width = 5, height = 5, units = "in")
+```
+Avg. local insertions vs. avg fp score
+```{r}
+df_mean <-
+  data.frame(
+    mean_fpscore <- rowMeans(fpscore_matrix),
+    mean_insertions <- rowMeans(local_insertion_matrix)
+  ) %>% 
+  mutate(mean_insertion_quintile = cut_number(mean_insertions, n=5))
+```
+
+```{r fig.width=5, fig.height=5}
+df_mean %>%
+  ggplot(aes(x = mean_insertion_quintile, y = mean_fpscore, fill = mean_insertion_quintile)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_x_discrete(labels=as.character(1:5)) +
+  theme_classic() +
+  ylab("Mean FP score") +
+  xlab("Mean # of local insertions (quintile)") +
+  ylim(c(0, 0.2)) +
+  theme(legend.position = "none") +
+  ggtitle("All SNPs")
+
+ggsave("figures/mean_local_insertion_quintile_vs_mean_fpscore.png", width = 5, height = 5, units = "in")
+```
+
+
+```{r}
+df_mean %>%
+  ggplot(aes(x = mean_insertions, y = mean_fpscore)) +
+  geom_hex(bins = 50) +
+  scale_fill_continuous(type = "viridis") +
+  scale_x_log10() +
+  theme_classic()
+```
+
+
+
+
+Now do the same thing but remove eQTL variants
+```{r}
+eQTL_signif_variant_gene_pairs <- readRDS(paste0(ROOT_DIR, "raw_data/GTEx/Liver.v8.signif_variant_gene_pairs.hg38.names.Rds"))
+eQTL_variantid2s <- eQTL_signif_variant_gene_pairs %>% 
+  mutate(variant_id2 = paste(variant_chrom, variant_pos, sep = ":")) %>%
+  pull(variant_id2) %>%
+  unique()
+
+
+variant_info <- readRDS("../regression/variant_info.Rds")
+
+non_eQTL_rsIDs <- variant_info %>% 
+  mutate(variant_id2 = paste(variant_chrom, variant_pos, sep = ":")) %>%
+  filter(!(variant_id2 %in% eQTL_variantid2s)) %>%
+  pull(variant_id)
+length(non_eQTL_rsIDs)
+
+```
+
+```{r}
+fpscore_matrix_non_eqtl <- fpscore_matrix[non_eQTL_rsIDs, ]
+local_insertion_matrix_non_eqtl <- local_insertion_matrix[non_eQTL_rsIDs, ]
+```
+
+```{r}
+df_mean_non_eqtl <-
+  data.frame(
+    mean_fpscore <- rowMeans(fpscore_matrix_non_eqtl),
+    mean_insertions <- rowMeans(local_insertion_matrix_non_eqtl)
+  ) %>% 
+  mutate(mean_insertion_quintile = cut_number(mean_insertions, n=5))
+```
+
+```{r fig.width=5, fig.height=5}
+df_mean_non_eqtl %>%
+  ggplot(aes(x = mean_insertion_quintile, y = mean_fpscore, fill = mean_insertion_quintile)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_x_discrete(labels=as.character(1:5)) +
+  theme_classic() +
+  ylab("Mean FP score") +
+  xlab("Mean # of local insertions (quintile)") +
+  ylim(c(0, 0.2)) +
+  theme(legend.position = "none") +
+  ggtitle("Non-eQTL SNPs only")
+
+ggsave("figures/mean_local_insertion_quintile_vs_mean_fpscore_non_eqtl.png", width = 5, height = 5, units = "in")
+```
+
+Now do the same thing but remove variants overlapping ChIP-seq peaks
+```{r}
+chip_peaks <- read.delim(paste0(ROOT_DIR, "raw_data/ChIP-seq/tf_clusters_liver_ENCODE/new_hg38/hg38_tf_clusters_liver_labelled.txt"))
+variant_info <- readRDS("../regression/variant_info.Rds")
+```
+
+Make GRanges
+```{r}
+variant_range <- GRanges(seqnames = variant_info$variant_chrom,
+                         ranges = IRanges(start = variant_info$variant_pos, 
+                                          end = variant_info$variant_pos))
+
+chip_peaks_range <- GRanges(seqnames = chip_peaks$chrom,
+                          ranges = IRanges(start = chip_peaks$chromStart, 
+                                           end = chip_peaks$chromEnd))
+```
+
+
+```{r}
+overlaps <- GenomicRanges::findOverlaps(variant_range, 
+                                        chip_peaks_range,
+                                        select = "arbitrary")
+
+variant_info$chip_overlap <- !is.na(overlaps)
+
+non_chip_rsIDs <- variant_info %>%
+  filter(!chip_overlap) %>%
+  pull(variant_id)
+```
+
+```{r}
+fpscore_matrix_non_chip <- fpscore_matrix[non_chip_rsIDs, ]
+local_insertion_matrix_non_chip <- local_insertion_matrix[non_chip_rsIDs, ]
+```
+
+```{r}
+df_mean_non_chip <-
+  data.frame(
+    mean_fpscore = rowMeans(fpscore_matrix_non_chip),
+    mean_insertions = rowMeans(local_insertion_matrix_non_chip)
+  ) %>% 
+  mutate(mean_insertion_quintile = cut_number(mean_insertions, n=5))
+```
+
+```{r fig.width=5, fig.height=5}
+df_mean_non_chip %>%
+  ggplot(aes(x = mean_insertion_quintile, y = mean_fpscore, fill = mean_insertion_quintile)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_x_discrete(labels=as.character(1:5)) +
+  theme_classic() +
+  ylab("Mean FP score") +
+  xlab("Mean # of local insertions (quintile)") +
+  ylim(c(0, 0.2)) +
+  theme(legend.position = "none") +
+  ggtitle("Non-ChIP-seq overlapping SNPs only")
+
+ggsave("figures/mean_local_insertion_quintile_vs_mean_fpscore_non_chip.png", width = 5, height = 5, units = "in")
+```

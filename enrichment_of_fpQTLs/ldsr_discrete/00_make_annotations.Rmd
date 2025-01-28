@@ -1,0 +1,68 @@
+This script turns lists of fpQTL SNPs into bedfiles, which can be fed into the LDSC pipeline. All fpQTLs come from regression WITH covariates 
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+fpQTLs <- list()
+
+# FP_METHODS <- c("PRINT_beta_logit_phi", "PRINT_beta_probit_phi", "PRINT_beta_cloglog_phi")
+
+# for (FP_METHOD in FP_METHODS) {
+#   for (FDR in c(5, 1)) {
+#     name <- FP_METHOD
+#     if (FDR != 5) {name <- sprintf("%s_FDR%d", FP_METHOD, FDR)}
+    
+#     filename <- sprintf("../../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR%d.txt", FP_METHOD, FDR)
+    
+#     fpQTLs[[name]] <- read.delim(filename)
+#   }
+# }
+
+FP_METHODS <- c("PRINT_beta_cloglog", "PRINT_no_gaussian")
+
+for (FP_METHOD in FP_METHODS) {
+  for (FDR in c(5, 10)) {
+    name <- FP_METHOD
+    if (FDR != 5) {name <- sprintf("%s_FDR%d", FP_METHOD, FDR)}
+    
+    filename <- sprintf("../../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR%d.txt", FP_METHOD, FDR)
+    
+    fpQTLs[[name]] <- read.delim(filename)
+  }
+}
+
+```
+
+
+
+```{r}
+for (annot in names(fpQTLs)) {
+  cat(annot, ": ", nrow(fpQTLs[[annot]]), " fpQTLs\n")
+  dir.create(file.path("annotations", annot), showWarnings = FALSE)
+  
+  fpQTLs[[annot]] %>%
+    rename(
+      chrom = variant_chrom,
+      end = variant_pos
+    ) %>%
+    mutate(start = end - 1) %>%
+    select(chrom, start, end) %>%
+    arrange(chrom, start) %>%
+    write.table(paste0("annotations/", annot, "/", annot, ".bed"), 
+                sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+}
+```
+
+```{r}
+x <- runif(20)
+y <- runif(20)
+model <- lm(x ~ y)
+
+summary(model)$r.squared
+```
+
+
+

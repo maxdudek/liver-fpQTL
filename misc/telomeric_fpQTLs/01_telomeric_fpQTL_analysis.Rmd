@@ -1,0 +1,372 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+
+```{r fig.width=14, fig.height=6}
+regression_results_chrom_lengths <- regression_results %>%
+  inner_join(chromosome_ends) %>%
+  mutate(fpQTL = ST_qval < 0.05) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+
+telomeric_variants_1Mb <- regression_results_chrom_lengths %>% filter(telomeric_1Mb) %>% pull(variant_id)
+telomeric_variants_2Mb <- regression_results_chrom_lengths %>% filter(telomeric_2Mb) %>% pull(variant_id)
+telomeric_variants_5Mb <- regression_results_chrom_lengths %>% filter(telomeric_5Mb) %>% pull(variant_id)
+```
+
+# Manhattan plot with "telomeric" variants highlighted
+```{r fig.width=14, fig.height=6}
+png("figures/manhattan_plot_telomeric_1Mb.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = telomeric_variants_1Mb,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+png("figures/manhattan_plot_telomeric_2Mb.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = telomeric_variants_2Mb,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+png("figures/manhattan_plot_telomeric_5Mb.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = telomeric_variants_5Mb,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+
+# Are fpQTLs enriched in telomeric regions?
+```{r}
+t <- table(regression_results_chrom_lengths$fpQTL, regression_results_chrom_lengths$telomeric_1Mb)
+rownames(t) <- c("non-fpQTL", "fpQTL")
+colnames(t) <- c("central", "telomeric_1Mb")
+t
+fisher.test(t)
+cat("\n\n")
+
+t <- table(regression_results_chrom_lengths$fpQTL, regression_results_chrom_lengths$telomeric_2Mb)
+rownames(t) <- c("non-fpQTL", "fpQTL")
+colnames(t) <- c("central", "telomeric_2Mb")
+addmargins(t)
+ft <- fisher.test(t)
+ft
+ft$p.value
+cat("\n\n")
+
+t <- table(regression_results_chrom_lengths$fpQTL, regression_results_chrom_lengths$telomeric_5Mb)
+rownames(t) <- c("non-fpQTL", "fpQTL")
+colnames(t) <- c("central", "telomeric_5Mb")
+t
+fisher.test(t)
+```
+
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+
+table(fpQTLs_telomeric$telomeric_1Mb)
+table(fpQTLs_telomeric$telomeric_2Mb)
+table(fpQTLs_telomeric$telomeric_5Mb)
+
+```
+
+```{r}
+fpQTLs_telomeric %>% filter(telomeric_1Mb)
+```
+
+
+
+
+
+
+# Distance to nearest CTCF peak (TAD boundaries)
+```{r}
+chip_seq_peaks <- read.delim(paste0(ROOT_DIR, "raw_data/ChIP-seq/tf_clusters_liver_ENCODE/new_hg38/hg38_tf_clusters_liver_labelled.txt"))
+
+CTCF_sites <- chip_seq_peaks %>%
+  filter(name == "CTCF")
+
+CTCF_sites_high_confidence <- CTCF_sites %>%
+  filter(HepG2 == 1, liver == 1, hepatocyte == 1)
+```
+
+```{r}
+CTCF_sites.range <- GRanges(seqnames = CTCF_sites$chrom, 
+                            ranges = IRanges(start = CTCF_sites$chromStart, 
+                                             end = CTCF_sites$chromEnd))
+
+CTCF_sites_high_confidence.range <- GRanges(seqnames = CTCF_sites_high_confidence$chrom, 
+                                            ranges = IRanges(start = CTCF_sites_high_confidence$chromStart, 
+                                                             end = CTCF_sites_high_confidence$chromEnd))
+
+fpQTL.range <- GRanges(seqnames = fpQTLs_telomeric$variant_chrom, 
+                         ranges = IRanges(start = fpQTLs_telomeric$variant_pos, 
+                                          end = fpQTLs_telomeric$variant_pos))
+```
+
+```{r}
+result <- distanceToNearest(fpQTL.range, CTCF_sites.range)
+fpQTLs_telomeric$distance_to_nearest_CTCF_site <- mcols(result)$distance
+
+result <- distanceToNearest(fpQTL.range, CTCF_sites_high_confidence.range)
+fpQTLs_telomeric$distance_to_nearest_CTCF_site_high_confidence <- mcols(result)$distance
+```
+
+```{r}
+fpQTLs_telomeric %>%
+  ggplot(aes(x = distance_to_end, y = distance_to_nearest_CTCF_site, color = -log10(pval))) +
+  geom_point() +
+  scale_color_gradient(low = "gold", high = "purple",
+                         name = bquote(-log[10](p))) +
+  theme_classic()
+
+fpQTLs_telomeric %>%
+  ggplot(aes(x = distance_to_end, y = distance_to_nearest_CTCF_site, color = -log10(pval))) +
+  geom_point() +
+  scale_color_gradient(low = "gold", high = "purple",
+                         name = bquote(-log[10](p))) +
+  theme_classic()
+```
+
+```{r}
+TELOMERE_SIZE <- 1e6
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = distance_to_nearest_CTCF_site, fill = telomeric)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 2e5)) +
+  theme_classic()
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = distance_to_nearest_CTCF_site, fill = telomeric)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 2e5)) +
+  theme_classic()
+```
+
+
+```{r}
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = distance_to_nearest_CTCF_site_high_confidence, fill = telomeric)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 2e5)) +
+  theme_classic()
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = distance_to_nearest_CTCF_site_high_confidence, fill = telomeric)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 2e5)) +
+  theme_classic()
+```
+
+# CTCF peak distance boxplot
+```{r}
+COLORS <- c("black", "#04cc39")
+
+df <- fpQTLs_telomeric %>%
+  mutate(
+    Mb1 = c("Non-telomeric", "Telomeric")[telomeric_1Mb + 1L],
+    Mb2 = c("Non-telomeric", "Telomeric")[telomeric_2Mb + 1L],
+    Mb5 = c("Non-telomeric", "Telomeric")[telomeric_5Mb + 1L]
+  ) %>%
+  pivot_longer(cols = starts_with("Mb"), names_to = "telomere_threshold", values_to = "telomeric") %>%
+  mutate(telomere_threshold = case_when(
+    telomere_threshold == "Mb1" ~ ">1 Mb",
+    telomere_threshold == "Mb2" ~ ">2 Mb",
+    telomere_threshold == "Mb5" ~ ">5 Mb"
+  ))
+
+df %>%
+  ggplot(aes(x = telomeric, y = distance_to_nearest_CTCF_site, fill = telomeric)) +
+  geom_boxplot() + 
+  scale_fill_manual(values = COLORS) +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 50000)) +
+  ylab("Distance to nearest CTCF site")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("fpQTL distance to nearest CTCF site , by different telomeric thresholds")
+ggsave("figures/CTCF_distance_boxplot.png", width = 8, height = 5, units = "in")
+
+df %>%
+  ggplot(aes(x = telomeric, y = distance_to_nearest_CTCF_site_high_confidence, fill = telomeric)) +
+  geom_boxplot() + 
+  scale_fill_manual(values = COLORS) +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 50000)) +
+  ylab("Distance to nearest CTCF site")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("fpQTL distance to nearest CTCF site (high confidence)")
+ggsave("figures/CTCF_distance__HC_boxplot.png", width = 8, height = 5, units = "in")
+```
+
+# CTCF distance statistical tests
+```{r}
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) CTCF distance \n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_1Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+y <- fpQTLs_telomeric %>% filter(telomeric_1Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (2 Mb) CTCF distance \n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_2Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+y <- fpQTLs_telomeric %>% filter(telomeric_2Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (5 Mb) CTCF distance \n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_5Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+y <- fpQTLs_telomeric %>% filter(telomeric_5Mb) %>% pull(distance_to_nearest_CTCF_site_high_confidence)
+t.test(x,y)
+cat("\n\n")
+
+```
+
+
+
+# TSS distance
+```{r}
+TELOMERE_SIZE <- 1e6
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = abs(distance_to_nearest_tss), fill = telomeric)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 5e5)) +
+  theme_classic()
+
+fpQTLs_telomeric %>%
+  mutate(telomeric = variant_pos < TELOMERE_SIZE | variant_pos > chrom_length - TELOMERE_SIZE) %>%
+  ggplot(aes(x = abs(distance_to_nearest_tss), fill = telomeric)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 20) +
+  facet_wrap(~telomeric) +
+  xlim(c(0, 5e5)) +
+  theme_classic()
+```
+# TSS distance boxplot
+```{r}
+COLORS <- c("black", "#04cc39")
+
+df <- fpQTLs_telomeric %>%
+  mutate(
+    Mb1 = c("Non-telomeric", "Telomeric")[telomeric_1Mb + 1L],
+    Mb2 = c("Non-telomeric", "Telomeric")[telomeric_2Mb + 1L],
+    Mb5 = c("Non-telomeric", "Telomeric")[telomeric_5Mb + 1L]
+  ) %>%
+  pivot_longer(cols = starts_with("Mb"), names_to = "telomere_threshold", values_to = "telomeric") %>%
+  mutate(telomere_threshold = case_when(
+    telomere_threshold == "Mb1" ~ ">1 Mb",
+    telomere_threshold == "Mb2" ~ ">2 Mb",
+    telomere_threshold == "Mb5" ~ ">5 Mb"
+  ))
+
+df %>%
+  ggplot(aes(x = telomeric, y = abs(distance_to_nearest_tss), fill = telomeric)) +
+  geom_boxplot() + 
+  scale_fill_manual(values = COLORS) +
+  facet_wrap(~telomere_threshold) +
+  ylim(c(0, 1e5)) +
+  ylab("Distance to nearest TSS")+
+  xlab(NULL) +
+  theme_classic() +
+  ggtitle("fpQTL TSS proximity, by different telomeric thresholds")
+ggsave("figures/TSS_proximity_boxplot.png", width = 8, height = 5, units = "in")
+```
+
+# TSS distance statistical tests
+```{r}
+cat("Telomeric vs. non-telomeric fpQTLs (1 Mb) TSS proximity\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_1Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+y <- fpQTLs_telomeric %>% filter(telomeric_1Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (2 Mb) TSS proximity\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_2Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+y <- fpQTLs_telomeric %>% filter(telomeric_2Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+t.test(x,y)
+cat("\n\n")
+
+cat("Telomeric vs. non-telomeric fpQTLs (5 Mb) TSS proximity\n")
+x <- fpQTLs_telomeric %>% filter(!telomeric_5Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+y <- fpQTLs_telomeric %>% filter(telomeric_5Mb) %>% pull(distance_to_nearest_tss) %>% abs()
+t.test(x,y)
+cat("\n\n")
+```
+
+
+```{r}
+fpQTLs_telomeric %>%
+  filter(variant_chrom == "chr2") %>%
+  arrange(variant_pos)
+```
+
+
+

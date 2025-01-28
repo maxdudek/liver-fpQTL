@@ -1,0 +1,142 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(betareg)
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("FP_methods/", FP_METHOD)
+
+cat("Loading data without missing variants removed...\n")
+fpscore_matrix <- readRDS(paste0(DIR, "/data/fpscore_matrix_normalized.Rds"))
+genotype_matrix <- readRDS(paste0(DIR, "/data/genotype_matrix_regression.Rds"))
+variant_info <- readRDS(paste0(DIR, "/data/variant_info_regression.Rds"))
+
+local_insertions <- readRDS("../PRINT/consolidated_results/PRINT_local_insertion_matrix.Rds")
+
+regression_covariates <- read.delim(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/sample_covariates/regression_covariates_170.txt"))
+
+regression_covariates %>%
+  filter(sample_id %in% colnames(fpscore_matrix)) %>%
+  arrange(match(sample_id, colnames(fpscore_matrix))) ->
+  regression_covariates
+
+cat("Verifying sample order in covariates...\n")
+all(colnames(fpscore_matrix) == regression_covariates$sample_id)
+
+cat("Verifying variant order in data tables...\n")
+all(rownames(fpscore_matrix) == variant_info$variant_id)
+all(rownames(genotype_matrix) == variant_info$variant_id)
+all(rownames(local_insertions) == variant_info$variant_id)
+
+cat("Verifying sample order in data tables...\n")
+all(colnames(fpscore_matrix) == colnames(genotype_matrix))
+all(colnames(local_insertions) == colnames(genotype_matrix))
+```
+
+```{r}
+dim(fpscore_matrix)
+```
+
+
+```{r}
+i <- "rs12740374"
+
+x <- genotype_matrix[i,]
+y <- fpscore_matrix[i,]
+z <- local_insertions[i,]
+```
+
+
+```{r}
+# Linear models
+model.lin.cov <- lm(y ~ x + regression_covariates$sex + regression_covariates$batch + regression_covariates$PC1 +
+              regression_covariates$PC2 + regression_covariates$PC3)  
+
+model.lin <- lm(y ~ x)
+
+coef <- summary(model.lin)$coefficients
+beta <- coef[2,1]
+pval <- coef[2,4]
+r_squared <- summary(model.lin)$r.squared
+c(beta, pval, r_squared)
+
+coef <- summary(model.lin.cov)$coefficients
+beta <- coef[2,1]
+pval <- coef[2,4]
+r_squared <- summary(model.lin.cov)$r.squared
+c(beta, pval, r_squared)
+```
+
+```{r}
+model.bet <- betareg(y ~ x)
+
+summary(model.bet)
+```
+
+Beta regression
+```{r}
+model.formula <- "y ~ x + regression_covariates$sex + regression_covariates$batch + 
+                           regression_covariates$PC1 + regression_covariates$PC2 + regression_covariates$PC3"
+
+model.formula <- paste0(model.formula, " | x + regression_covariates$sex + regression_covariates$batch + 
+                           regression_covariates$PC1 + regression_covariates$PC2 + regression_covariates$PC3")
+
+model.bet.cov <- betareg(as.formula(model.formula), link="logit", link.phi="log")  
+
+summary(model.bet.cov)
+summary(model.bet.cov)$pseudo.r.squared
+```
+
+```{r}
+foo <- function(name, middle = "F", last = "Dudek") {
+  sprintf("%s %s. %s", name, middle, last)
+}
+
+bar <- function(...) {
+  for (name in c("Max", "Adam", "Duke")) {
+    print(foo(name, ...))
+  }
+}
+
+bar(middle = "G", last = "Smith")
+```
+
+
+
+```{r}
+coef <- summary(model.bet.cov)$coefficients$mean
+beta <- coef[2,1]
+pval <- coef[2,4]
+r_squared <- summary(model.bet.cov)$r.squared
+c(beta, pval, r_squared)
+```
+
+
+Logistic regression
+```{r}
+# Linear models
+model.log.cov <- glm(y ~ x + regression_covariates$sex + regression_covariates$batch + regression_covariates$PC1 +
+              regression_covariates$PC2 + regression_covariates$PC3, family = "binomial")  
+
+model.log <- glm(y ~ x, family = "binomial")
+
+names(summary(model.log))
+
+coef <- summary(model.log)$coefficients
+beta <- coef[2,1]
+pval <- coef[2,4]
+r_squared <- summary(model.log)$r.squared
+c(beta, pval, r_squared)
+
+coef <- summary(model.log.cov)$coefficients
+beta <- coef[2,1]
+pval <- coef[2,4]
+r_squared <- summary(model.log.cov)$r.squared
+c(beta, pval, r_squared)
+```
+
+
+
+

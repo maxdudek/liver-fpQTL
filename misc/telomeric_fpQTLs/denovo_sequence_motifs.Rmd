@@ -1,0 +1,205 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(seqinr)
+library(qqman)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+variant_seqs <- readRDS("../../motif_analysis/variant_seqs.Rds")
+radius <- nchar(variant_seqs$ref_seq[1]) %/% 2
+```
+
+```{r}
+width <- 6
+
+variant_seqs6 <- data.frame(
+  variant_id = variant_seqs$variant_id,
+  ref_seq = variant_seqs$ref_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1)),
+  alt_seq = variant_seqs$alt_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1))
+)
+```
+
+```{r}
+width <- 8
+
+variant_seqs8 <- data.frame(
+  variant_id = variant_seqs$variant_id,
+  ref_seq = variant_seqs$ref_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1)),
+  alt_seq = variant_seqs$alt_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1))
+)
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+```
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(telomeric = variant_pos < 1e6 | variant_pos > chrom_length - 1e6)
+```
+
+```{r}
+fpQTLs_telomeric_seqs <- fpQTLs_telomeric %>%
+  inner_join(variant_seqs6)
+
+fpQTLs_telomeric_seqs %>%
+  filter(telomeric) %>%
+  select(ref_seq, alt_seq)
+```
+
+```{r}
+fpQTLs_telomeric_seqs %>%
+  mutate(
+    telomeric_motif = 
+      grepl("TTAGGG", ref_seq, fixed = TRUE) | grepl("CCCTAA", ref_seq, fixed = TRUE) | 
+      grepl("TTAGGG", alt_seq, fixed = TRUE) | grepl("CCCTAA", alt_seq, fixed = TRUE)
+  ) %>%
+  filter(telomeric_motif) %>%
+  select(ref_seq, alt_seq, telomeric)
+```
+
+
+
+
+
+# Export seqs for denovo motif discovery
+```{r}
+width <- 20
+
+variant_seqs20 <- data.frame(
+  variant_id = variant_seqs$variant_id,
+  ref_seq = variant_seqs$ref_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1)),
+  alt_seq = variant_seqs$alt_seq %>% str_sub(radius+1 - (width-1), radius+1 + (width-1))
+)
+
+regression_results_seqs20 <- regression_results %>%
+  inner_join(variant_seqs20)
+
+fpQTLs_telomeric_seqs20 <- fpQTLs_telomeric %>%
+  inner_join(variant_seqs20)
+```
+
+```{r}
+# telomeric fpQTLs
+df <- fpQTLs_telomeric_seqs20 %>%
+  filter(telomeric) %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), names = df$seq_name, "seqs/telomeric_fpQTLs.fasta", as.string = TRUE)
+
+# non-telomeric fpQTLs
+df <- fpQTLs_telomeric_seqs20 %>%
+  filter(!telomeric) %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), df$seq_name, "seqs/non_telomeric_fpQTLs.fasta", as.string = TRUE)
+
+# All fpQTLs
+df <- fpQTLs_telomeric_seqs20 %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), df$seq_name, "seqs/all_fpQTLs.fasta", as.string = TRUE)
+
+# All variants
+df <- regression_results_seqs20 %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), df$seq_name, "seqs/all_variants.fasta", as.string = TRUE)
+
+# All non-fpQTLs
+df <- regression_results_seqs20 %>%
+  filter(ST_qval > 0.05) %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), df$seq_name, "seqs/non_fpQTLs.fasta", as.string = TRUE)
+
+# All non-(telomeric fpQTL) variants
+df <- regression_results_seqs20 %>%
+  inner_join(chromosome_ends) %>%
+  mutate(
+    telomeric = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    fpQTL = ST_qval <= 0.05
+  ) %>%
+  filter(!(fpQTL & telomeric)) %>%
+  select(variant_id, ref_seq, alt_seq) %>%
+  pivot_longer(c("ref_seq", "alt_seq"), names_to = "name", values_to = "seq") %>%
+  mutate(seq_name = paste(variant_id, name, sep = "_")) %>%
+  select(seq_name, seq)
+write.fasta(as.list(df$seq), df$seq_name, "seqs/non_telomericfpQTL_variants.fasta", as.string = TRUE)
+
+```
+
+# Look for motif found by denovo discovery - CTGTGTCT
+```{r}
+
+fpQTLs_telomeric_seqs20 %>%
+  mutate(
+    telomeric_motif = 
+      grepl("C(T|G)GT(G|C)(T|C)(C|A)T", ref_seq) | grepl("A(G|T)(A|G)(C|G)AC(A|C)G", ref_seq) | 
+      grepl("C(T|G)GT(G|C)(T|C)(C|A)T", alt_seq) | grepl("A(G|T)(A|G)(C|G)AC(A|C)G", alt_seq)
+  ) %>%
+  filter(telomeric_motif) %>%
+  select(variant_id, ref_seq, alt_seq, telomeric)
+
+```
+
+```{r}
+streme_hits <- read.delim("streme_output/telomeric_fpQTLs_vs_non_telomeric_fpQTLs/sequences.tsv")
+variant_hits <- streme_hits %>%
+  filter(motif_ID == "1-CTGTGTCTRR") %>%
+  separate("seq_ID", sep = "_", into = c("variant_id", "allele", NA)) %>%
+  pull(variant_id)
+```
+
+# Manhattan plot of streme hits
+```{r fig.width=14, fig.height=6}
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = variant_hits,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+```
+
+
+

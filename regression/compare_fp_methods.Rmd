@@ -1,0 +1,243 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggpubr)
+```
+
+```{r}
+FP_methods <- list.dirs("FP_methods", full.names = FALSE, recursive = FALSE)
+
+# FP_methods <- c("PRINT_no_gaussian", "PRINT_beta_cloglog", "PRINT_beta_logit")
+
+regression_results.filenames <- paste0("FP_methods/", FP_methods,
+                            "/regression_results/fp_score_covariates_genotype_regression.Rds")
+
+regression_results <- lapply(regression_results.filenames, readRDS)
+names(regression_results) <- FP_methods
+
+cat(FP_methods, sep = " ")
+```
+
+```{r}
+regression_results[["PRINT_beta"]] %>%
+  filter(variant_id == "rs12740374")
+
+regression_results[["PRINT_beta"]] %>%
+  filter(variant_id == "rs55823018")
+
+regression_results[["PRINT_beta"]] %>%
+  filter(variant_id == "rs11710930")
+```
+
+
+```{r fig.width=5, fig.height=5}
+plot_p_correlation <- function(x, y) {
+  
+  regression_results[[x]] %>%
+    filter(ST_qval < 0.05) %>%
+    pull(pval) %>%
+    max() ->
+    FDR5.x
+  
+  regression_results[[y]] %>%
+    filter(ST_qval < 0.05) %>%
+    pull(pval) %>%
+    max() ->
+    FDR5.y
+  
+  regression_results[[x]] %>%
+    dplyr::select(variant_id, pval, beta) %>%
+    inner_join(
+      regression_results[[y]] %>% 
+        dplyr::select(variant_id, pval, beta), 
+      by = join_by(variant_id)
+    ) %>%
+    ggplot(aes(x = -log10(pval.x), y = -log10(pval.y))) +
+    geom_vline(xintercept = -log10(FDR5.x), color = "red", linewidth = 0.5, linetype = "dotted") +
+    geom_hline(yintercept = -log10(FDR5.y), color = "red", linewidth = 0.5, linetype = "dotted") +
+    geom_point(data = . %>% filter(pval.x < 0.01 | pval.y < 0.01), size = 1) +
+    geom_abline(slope = 1, intercept = 0, color = "blue", linewidth = 0.5) +
+    xlab(bquote(.(x) ~ log[10](p))) + 
+    ylab(bquote(.(y) ~ log[10](p))) +
+    stat_cor(aes(label = after_stat(r.label)), method = "spearman", 
+             r.accuracy = 0.01, cor.coef.name = "rho") +
+    theme_classic() ->
+    plot
+  
+  ggsave(paste0("figures/FP_methods_comparison/", x, "_vs_", y, "_pval.png"),
+         plot = plot, width = 7, height = 7, units = "in")
+  
+  # return(plot)
+}
+
+# plot_p_correlation("PRINT_local_cutsites_geq10", "TOBIAS_local_cutsites_geq10")
+```
+
+```{r}
+plot_p_correlation("PRINT_no_gaussian", "PRINT_beta_cloglog")
+plot_p_correlation("PRINT_beta_logit", "PRINT_beta_cloglog")
+plot_p_correlation("PRINT_beta_probit", "PRINT_beta_cloglog")
+plot_p_correlation("PRINT_beta_logit", "PRINT_beta_probit")
+```
+
+```{r}
+important_snps <- c("rs12740374", "rs55823018", "rs11710930")
+
+PRINT_beta_cloglog <- read.delim("FP_methods/PRINT_beta_cloglog/regression_results/fpQTLs_covariates_FDR5.txt")
+
+PRINT_beta_cloglog %>%
+  filter(variant_id %in% important_snps)
+  
+```
+
+
+No gaussian vs. beta
+```{r}
+FP_METHODS <- c("PRINT_beta_logit", "PRINT_beta_cloglog", "PRINT_no_gaussian")
+
+get_df <- function(method) {
+  read.delim(sprintf("FP_methods/%s/regression_results/fpQTLs_covariates_FDR5.txt", method))
+}
+
+fpQTL_dfs <- FP_METHODS %>% lapply(get_df) %>% setNames(FP_METHODS)
+fpQTLs <- fpQTL_dfs %>% lapply(pull, "variant_id")
+```
+
+```{r}
+fpQTL_dfs %>% lapply(nrow)
+```
+
+
+```{r}
+fpQTLs_comparison <- data.frame(
+  variant_id = unique(unlist(fpQTLs))
+) %>%
+  mutate(
+    beta_logit = variant_id %in% fpQTLs[["PRINT_beta_logit"]],
+    beta_cloglog = variant_id %in% fpQTLs[["PRINT_beta_cloglog"]],
+    linear = variant_id %in% fpQTLs[["PRINT_no_gaussian"]]
+  )
+
+fpQTLs_comparison %>% count(beta_cloglog, linear)
+```
+
+```{r fig.width=3, fig.height=3}
+fpQTL_dfs[["PRINT_beta_cloglog"]] %>%
+  ggplot(aes(x = linear_beta, y = beta)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(size = 01) +
+  ylab("Beta regression effect") +
+  xlab("Linear regression effect") +
+  stat_cor(aes(label = after_stat(r.label)), method = "spearman", 
+             r.accuracy = 0.01, cor.coef.name = "rho") +
+  theme_classic()
+
+ggsave(paste0("figures/effect_size_beta_cloglog_vs_linear.png"), width = 3, height = 3, units = "in")
+
+fpQTL_dfs[["PRINT_beta_cloglog"]] %>%
+  ggplot(aes(x = abs(linear_beta), y = abs(beta))) +
+  geom_point(size = 01) +
+  ylab("Absolute beta regression effect") +
+  xlab("Absolute linear regression effect") +
+  stat_cor(aes(label = after_stat(r.label)), method = "spearman", 
+             r.accuracy = 0.01, cor.coef.name = "rho") +
+  theme_classic()
+
+ggsave(paste0("figures/abs_effect_size_beta_cloglog_vs_linear.png"), width = 3, height = 3, units = "in")
+```
+
+
+```{r}
+library(VennDiagram)
+
+# Chart
+venn.diagram(
+        x = list(fpQTLs[["PRINT_beta_logit"]], 
+                 fpQTLs[["PRINT_no_gaussian"]], 
+                 fpQTLs[["PRINT_beta_cloglog"]]),
+        category.names = c("logit", "linear", "cloglog"),
+        filename = "figures/FP_methods_comparison/beta_linear_venn.png",
+        output=TRUE,
+        
+        # Output features
+        imagetype="png", height = 500,  width = 500,  resolution = 300, compression = "lzw",
+        
+        # Circles
+        lwd = 2, lty = 'blank', fill = c("#1E56A0", "grey", "#FF5959"),
+        
+        # Numbers
+        cex = .6, fontface = "bold", fontfamily = "sans",
+
+        # Labels
+        cat.cex = 0.5, cat.fontface = "bold", cat.default.pos = "outer", cat.fontfamily = "sans",
+        
+        disable.logging = TRUE
+)
+
+venn.diagram(
+        x = list(fpQTLs[["PRINT_no_gaussian"]], 
+                 fpQTLs[["PRINT_beta_cloglog"]]),
+        category.names = c("linear", "beta_cloglog"),
+        filename = "figures/FP_methods_comparison/beta_cloglog_linear_venn.png",
+        output=TRUE,
+        
+        # Output features
+        imagetype="png", height = 500,  width = 500,  resolution = 300, compression = "lzw",
+        
+        # Circles
+        lwd = 2, lty = 'blank', fill = c("grey", "#FF5959"),
+        
+        # Numbers
+        cex = .6, fontface = "bold", fontfamily = "sans",
+
+        # Labels
+        cat.cex = 0.5, cat.fontface = "bold", cat.default.pos = "outer", cat.fontfamily = "sans",
+        
+        disable.logging = TRUE
+)
+```
+
+Compare FP score distributions of method-exclusive fpQTLs
+```{r}
+linear_fpscore_matrix <- readRDS("FP_methods/PRINT_no_gaussian/data/fpscore_matrix_fpQTLs_with_covariates.Rds")
+beta_fpscore_matrix <- readRDS("FP_methods/PRINT_beta/data/fpscore_matrix_fpQTLs_with_covariates.Rds")
+```
+
+```{r}
+linear_exclusive_fpQTLs <- fpQTLs_beta_linear %>% filter(linear, !beta) %>% pull(variant_id)
+beta_exclusive_fpQTLs <- fpQTLs_beta_linear %>% filter(beta, !linear) %>% pull(variant_id)
+mutual_fpQTLs <- fpQTLs_beta_linear %>% filter(beta, linear) %>% pull(variant_id)
+
+linear_exclusive_fpQTL_fpscores <- linear_fpscore_matrix[linear_exclusive_fpQTLs,] %>%
+  as.data.frame() %>%
+  rownames_to_column("variant_id") %>%
+  pivot_longer(-variant_id, names_to = "sample", values_to = "fpscore")
+
+beta_exclusive_fpQTL_fpscores <- beta_fpscore_matrix[beta_exclusive_fpQTLs,] %>%
+  as.data.frame() %>%
+  rownames_to_column("variant_id") %>%
+  pivot_longer(-variant_id, names_to = "sample", values_to = "fpscore")
+```
+
+```{r fig.width=10, fig.height=10}
+linear_exclusive_fpQTL_fpscores %>%
+  filter(variant_id %in% sample(linear_exclusive_fpQTLs, 100)) %>%
+  ggplot(aes(x = fpscore)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~variant_id, ncol = 10) +
+  theme_bw() +
+  xlim(c(0,1))
+
+beta_exclusive_fpQTL_fpscores %>%
+  filter(variant_id %in% sample(beta_exclusive_fpQTLs, 100)) %>%
+  ggplot(aes(x = fpscore)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~variant_id, ncol = 10) +
+  theme_bw() +
+  xlim(c(0,1))
+```
+
+
+
+
+

@@ -1,0 +1,300 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+
+```{r}
+dbSNP155_full <- read.delim(paste0(ROOT_DIR, "raw_data/dbSNP/dbSNP155/dbSnp155Common.cut.tsv"))
+
+dbSNP155_full <- dbSNP155_full %>%
+  dplyr::rename(rsID = name, ref.dbSNP = ref, alts.dbSNP = alts, 
+                chrom.dbSNP = chrom, chromStart.dbSNP = chromStart, chromEnd.dbSNP = chromEnd)
+
+# Filter to normal chromosomes
+CHROMS <- paste0("chr", 1:22)
+dbSNP155 <- dbSNP155_full %>%
+  dplyr::filter(chrom.dbSNP %in% CHROMS)
+  
+```
+
+
+```{r}
+variant_info <- readRDS("../../regression/variant_info.Rds")
+
+variant_info <- variant_info %>%
+  dplyr::rename(original_rsID = variant_id) %>%
+  select(-genotype0_counts, -genotype1_counts, -genotype2_counts, -maf) 
+
+# "original_rsID"s can look like rsXXXXXXX_2 or rsXXXXXXXX;rsYYYYYYY
+# rsXXXXXXX_2 --> rsXXXXXXXX
+# split up rsIDs like rsXXXXXXXX;rsYYYYYYY
+variant_info <- variant_info %>%
+  separate(original_rsID, into = c("rsID", NA), remove = FALSE, sep = "_", fill = "right") %>%
+  separate_rows(rsID, sep = ";")
+```
+
+First, eliminate all the variants that are already "correct" - i.e., the rsID is already in dbSNP 155 at the correct position
+```{r}
+variant_info.dbSNP_rsID_joined <- variant_info %>%
+  left_join(dbSNP155, by = join_by(rsID))
+
+variant_info.dbSNP_rsID_joined %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.Rds")
+```
+
+```{r}
+variant_info.dbSNP_rsID_joined <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.Rds")
+```
+
+```{r}
+data.frame(x = c(TRUE, FALSE)) %>% arrange(x)
+```
+
+
+Separate original rsIDs into success and failure
+```{r}
+nrow(variant_info.dbSNP_rsID_joined)
+
+# Success
+variant_info.dbSNP_rsID_joined.success <- variant_info.dbSNP_rsID_joined %>%
+  dplyr::filter(!is.na(ref.dbSNP)) %>%
+  group_by(original_rsID) %>%
+  arrange(variant_pos != chromEnd.dbSNP) %>% # if multiple rsIDs, prioritize the one with the correct position
+  dplyr::filter(row_number()==1) # Get one rsID for each "original" rsID
+
+variant_info.dbSNP_rsID_joined.success %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.success.Rds")
+
+# Failure - if NONE of the rsIDs associated with the original rsID were matched
+variant_info.dbSNP_rsID_joined.failure <- variant_info.dbSNP_rsID_joined %>%
+  group_by(original_rsID) %>%
+  dplyr::filter(sum(!is.na(ref.dbSNP)) == 0) %>% # If there were no non-missing rows for the original rsID
+  select(-ends_with(".dbSNP"))
+
+variant_info.dbSNP_rsID_joined.failure %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.Rds")
+```
+
+```{r}
+variant_info.dbSNP_rsID_joined.success <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.success.Rds")
+variant_info.dbSNP_rsID_joined.failure <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.Rds")
+```
+
+
+
+```{r}
+# How many original variants?
+variant_info %>% pull(original_rsID) %>% unique() %>% length()
+
+# How many successful original rsIDs?
+nrow(variant_info.dbSNP_rsID_joined.success) 
+
+# How many failures?
+variant_info.dbSNP_rsID_joined.failure %>% pull(original_rsID) %>% unique() %>% length()
+
+# Of the successful variants, how many have the same position as dbSNP155?
+variant_info.dbSNP_rsID_joined.success %>% 
+  count(variant_pos == chromEnd.dbSNP)
+
+# Which ones don't match position?
+variant_info.dbSNP_rsID_joined.success %>% 
+  dplyr::filter(variant_pos != chromEnd.dbSNP) %>%
+  dplyr::select(rsID, variant_chrom, variant_pos, chromStart.dbSNP, chromEnd.dbSNP,
+         ref_allele, ref.dbSNP, alt_allele, alts.dbSNP)
+```
+
+
+```{r}
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined <- variant_info.dbSNP_rsID_joined.failure %>%
+  left_join(dbSNP155 %>% dplyr::rename(rsID.dbSNP = rsID), by = join_by(variant_chrom == chrom.dbSNP, variant_pos == chromEnd.dbSNP))
+
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.Rds")
+```
+
+```{r}
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.Rds")
+```
+
+
+
+```{r}
+# Split into success and failure
+
+# Success
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success <- variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined %>%
+  dplyr::filter(!is.na(ref.dbSNP)) %>%
+  group_by(original_rsID) %>%
+  dplyr::filter(row_number()==1) # Get one rsID for each "original" rsID
+
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success.Rds")
+
+# Failure - if NONE of the rsIDs associated with the original rsID were matched
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure <- variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined %>%
+  group_by(original_rsID) %>%
+  dplyr::filter(sum(!is.na(ref.dbSNP)) == 0) %>% # If there were no non-missing rows for the original rsID
+  select(-ends_with(".dbSNP"))
+
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure %>% saveRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure.Rds")
+```
+
+```{r}
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success.Rds")
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure.Rds")
+```
+
+
+```{r}
+# How many original variants?
+variant_info.dbSNP_rsID_joined.failure %>% pull(original_rsID) %>% unique() %>% length()
+
+# How many successful original rsIDs?
+nrow(variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success) 
+
+# How many failures?
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure %>% pull(original_rsID) %>% unique() %>% length()
+```
+
+```{r}
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure
+```
+
+Test if searching on alt chromosomes helps - it doesn't
+```{r}
+test_join <- variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure %>%
+  left_join(dbSNP155, by = join_by(rsID))
+
+test_join %>%
+  dplyr::filter(!is.na(ref.dbSNP))
+```
+
+Test if searching on start position helps - not really? The alleles are different
+```{r}
+test_join <- variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure %>%
+  left_join(dbSNP155 %>% dplyr::rename(rsID.dbSNP = rsID), by = join_by(variant_chrom == chrom.dbSNP, variant_pos == chromStart.dbSNP))
+
+test_join %>%
+  dplyr::filter(!is.na(ref.dbSNP))
+```
+
+Where are the missing variants?
+```{r}
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure.Rds")
+missing_variants <- variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.failure %>% pull(original_rsID) %>% unique()
+
+library(qqman)
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+regression_results <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  dplyr::filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+
+regression_results <- regression_results %>% 
+  mutate(
+    fpQTL = ST_qval < 0.05,
+    dbSNP155_missing = variant_id %in% missing_variants
+  )
+
+# How many fpQTLs are missing? - only 7
+regression_results %>% 
+  count(fpQTL, dbSNP155_missing)
+
+```
+
+```{r}
+png(file="figures/manhattan_plot_missing_from_dbSNP155.png", width = 1200, height = 600)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = missing_variants,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+
+
+Make key to convert original Gencove rsID into dbSNP rsID
+```{r}
+variant_info.dbSNP_rsID_joined.success <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.success.Rds")
+variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success <- readRDS("variant_info/variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success.Rds")
+```
+
+```{r}
+dbSNP151_rsKey <- rbind(variant_info.dbSNP_rsID_joined.success %>% dplyr::rename(rsID.dbSNP = rsID),
+                        variant_info.dbSNP_rsID_joined.failure.dbSNP_pos_joined.success) %>%
+  select(original_rsID, rsID.dbSNP)
+
+dbSNP151_rsKey %>% saveRDS("gencove_vcf_to_dbSNP155_key.Rds")
+```
+
+
+After applying the key, do we get more overlap with snipa?
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+regression_results <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+dbSNP151_rsKey <- readRDS("gencove_vcf_to_dbSNP155_key.Rds")
+
+
+```
+
+
+```{r}
+# Load 1000G Phase3v5 SNPs (used by SNiPA to get proxys)
+eur_snps <- readRDS(paste0(ROOT_DIR, "raw_data/1000G/rsIDs/grch37-1kgpp3v5-eur-rsIDs.Rds"))
+# afr_snps <- readRDS(paste0(ROOT_DIR, "raw_data/1000G/rsIDs/grch37-1kgpp3v5-afr-rsIDs.Rds"))
+# amr_snps <- readRDS(paste0(ROOT_DIR, "raw_data/1000G/rsIDs/grch37-1kgpp3v5-amr-rsIDs.Rds"))
+# eas_snps <- readRDS(paste0(ROOT_DIR, "raw_data/1000G/rsIDs/grch37-1kgpp3v5-eas-rsIDs.Rds"))
+# sas_snps <- readRDS(paste0(ROOT_DIR, "raw_data/1000G/rsIDs/grch37-1kgpp3v5-sas-rsIDs.Rds"))
+```
+
+```{r}
+regression_results_dbSNP_joined <- regression_results %>%
+  left_join(dbSNP151_rsKey, by = join_by(variant_id == original_rsID)) %>%
+  separate(variant_id, into = c("variant_id", NA), sep = "_", fill = "right") %>%
+  mutate(rsID.dbSNP = ifelse(is.na(rsID.dbSNP), variant_id, rsID.dbSNP))
+
+regression_results_dbSNP_joined <- regression_results_dbSNP_joined %>%
+  separate(variant_id, into = c("variant_id", NA), sep = "_", fill = "right") %>%
+  mutate(
+    fpQTL = ST_qval < 0.05,
+    snipa_eur_original = variant_id %in% eur_snps,
+    snipa_eur_dbSNP = rsID.dbSNP %in% eur_snps
+  )
+```
+
+
+
+
+```{r}
+regression_results_dbSNP_joined %>%
+  count(snipa_eur_original, snipa_eur_dbSNP)
+
+regression_results_dbSNP_joined %>%
+  dplyr::filter(fpQTL) %>%
+  count(snipa_eur_original, snipa_eur_dbSNP)
+
+# Which fpQTL variants are now in snipa set after merging with dbSNP?
+regression_results_dbSNP_joined %>%
+  dplyr::filter(fpQTL, !snipa_eur_original, snipa_eur_dbSNP)
+
+# Which fpQTLs were assigned a new rsID?
+regression_results_dbSNP_joined %>%
+  dplyr::filter(fpQTL, rsID.dbSNP != variant_id) %>%
+  select(variant_id, rsID.dbSNP)
+
+# Which fpQTL variants are still missing?
+regression_results_dbSNP_joined %>%
+  dplyr::filter(fpQTL, !snipa_eur_original, !snipa_eur_dbSNP)
+
+
+regression_results_dbSNP_joined %>%
+  dplyr::filter(is.na(rsID.dbSNP))
+```
+
+
+
+

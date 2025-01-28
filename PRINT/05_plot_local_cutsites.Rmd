@@ -1,0 +1,66 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+```{r}
+local_insertion_df <- readRDS("consolidated_results/PRINT_local_insertion_matrix.Rds")
+```
+
+
+```{r}
+local_insertion_df %>%
+  select(-variant_id) %>%
+  as.matrix() ->
+  local_insertion_matrix
+
+rownames(local_insertion_matrix) <- local_insertion_df$variant_id
+
+local_insertion_matrix[1:10, 1:10]
+```
+
+
+If we only consider variants with > 10 counts in a sample, how many samples is each variant included in? 
+```{r}
+num_samples_included <- rowSums(local_insertion_matrix >= 10)
+
+data.frame(num_samples_included) %>%
+  ggplot(aes(x = num_samples_included)) + 
+  geom_histogram(bins = 190)
+
+num_samples_included <- rowSums(local_insertion_matrix >= 15)
+
+data.frame(num_samples_included) %>%
+  ggplot(aes(x = num_samples_included)) + 
+  geom_histogram(bins = 190)
+```
+What is the mean number of counts for every variant? How are the means distributed? 
+```{r}
+mean_local_insertions <- rowMeans(local_insertion_matrix) %>% 
+  data.frame(mean_local_insertions = .)
+
+mean_local_insertions %>%
+  ggplot(aes(x = mean_local_insertions)) + 
+  geom_histogram(bins = 200) +
+  xlim(c(0, 100))
+
+mean_local_insertions %>%
+  filter(mean_local_insertions > 20) %>%
+  arrange(mean_local_insertions)
+```
+
+For a given variant, what does the distribution of local counts across samples look like? 
+```{r fig.width=10, fig.height=10}
+sampled_variants <- sample(1:nrow(local_insertion_matrix), 100)
+
+local_insertion_matrix[sampled_variants,] %>%
+  as.data.frame() %>%
+  rownames_to_column("variant_id") %>%
+  pivot_longer(2:190, names_to = "sample_id", values_to = "local_insertions") %>%
+  ggplot(aes(x = local_insertions)) + 
+  facet_wrap(~variant_id) + 
+  geom_histogram(bins = 100) +
+  xlim(0, 100)
+```
+
+
+

@@ -1,0 +1,498 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qvalue)
+library(janitor)
+library(ggpubr)
+library(viridis)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+MOTIF_THRESHOLD <- "p=5e-4"
+dir.create("figures/%s/%s" %>% sprintf(MOTIF_THRESHOLD, FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+fpQTLs <- read.delim("../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR5.txt" %>% sprintf(FP_METHOD))
+```
+
+
+```{r}
+motif_matches <- readRDS(sprintf("motif_match_results/%s/%s_motif_matches.Rds", MOTIF_THRESHOLD, FP_METHOD))
+motif_summary <- read.delim(sprintf("motif_summary/%s/%s_motif_summary.txt", MOTIF_THRESHOLD, FP_METHOD))
+```
+
+```{r}
+# For beta regression, join with linear effect sizes
+if (grepl("PRINT_beta", FP_METHOD, fixed = TRUE)) {
+  linear_regression <- readRDS("../regression/FP_methods/PRINT_no_gaussian/regression_results/fp_score_covariates_genotype_regression.Rds")
+  
+  linear_regression <- linear_regression %>%
+    dplyr::rename(linear_beta = beta) %>%
+    dplyr::select(variant_id, linear_beta)
+  
+  motif_matches <- motif_matches %>%
+    inner_join(linear_regression, by = join_by("variant_id"))
+}
+```
+
+
+```{r}
+motif_info <- read.delim("motif_summary/motif_info.txt")
+
+motifs_with_chip_data <-
+  motif_info %>%
+  dplyr::filter(has_chip_data) %>%
+  pull(motif_id) %>%
+  unique()
+
+length(motifs_with_chip_data)
+```
+
+```{r}
+TFs_with_chip_data <- motif_info %>%
+  dplyr::filter(has_chip_data) %>%
+  pull(TF_name) %>%
+  unique() 
+
+length(TFs_with_chip_data)
+```
+
+
+
+
+
+# Part 1: Filter results for motifs with ChIP data
+```{r}
+motif_summary_chip_only <- motif_summary %>%
+  dplyr::filter(!is.na(TFs_with_chip_data)) %>%
+  mutate(
+    fpQTL_match_q = qvalue(fpQTL_match_p, lfdr.out = FALSE)$qvalues,
+    concordant_q = qvalue(concordant_p, lfdr.out = FALSE)$qvalues
+  )
+  
+
+motif_matches_chip_only <- motif_matches %>%
+  dplyr::filter(motif_id %in% motifs_with_chip_data)
+  
+```
+
+```{r}
+motif_summary_chip_only %>%
+  arrange(concordant_q)
+```
+
+# MANUSCRIPT - Figure 3C (p=5e-4)
+```{r fig.width=3, fig.height=3}
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  # sample_frac(0.01) %>%
+  mutate(concordant = sign(delta_score) == sign(beta)) %>%
+  ggplot(aes(x = abs(delta_score), y = beta * sign(delta_score))) +
+  geom_point(aes(color = concordant), size = 1.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  scale_color_manual(name = "", values = c("grey","#638eca"),
+                     labels = c("discordant", "concordant"), guide = "none") +
+  xlab("Absolute Δ motif score") +
+  ylab("fpQTL effect size \n(relative to stronger motif)") +
+  # xlim(c(-15.2, 15.1)) +
+  # ylim(c(-0.32, 0.2)) +
+  stat_cor(method = "spearman", label.y = -0.1, label.x = 4, label.x.npc = 0.55, size = 3.5) +
+  # ylim(c(NA, 0.15)) +
+  theme_classic()
+
+ggsave(sprintf("figures/%s/%s/%s_concordance_scatter_%s.png", 
+               MOTIF_THRESHOLD, FP_METHOD, FP_METHOD, MOTIF_THRESHOLD), 
+       width = 3, height = 3, units = "in")
+
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  # sample_frac(0.01) %>%
+  mutate(concordant = sign(delta_score) == sign(linear_beta)) %>%
+  ggplot(aes(x = abs(delta_score), y = linear_beta * sign(delta_score))) +
+  geom_point(aes(color = concordant), size = 1.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  scale_color_manual(name = "", values = c("grey","#638eca"),
+                     labels = c("discordant", "concordant"), guide = "none") +
+  xlab("Absolute Δ motif score") +
+  ylab("fpQTL linear effect size \n(relative to stronger motif)") +
+  # xlim(c(-15.2, 15.1)) +
+  # ylim(c(-0.32, 0.2)) +
+  stat_cor(method = "spearman", label.y = -0.23, label.x = 4, label.x.npc = 0.55, size = 3.5) +
+  # ylim(c(NA, 0.15)) +
+  theme_classic()
+
+ggsave(sprintf("figures/%s/%s/%s_concordance_scatter_%s_linear.png", 
+               MOTIF_THRESHOLD, FP_METHOD, FP_METHOD, MOTIF_THRESHOLD), 
+       width = 3, height = 3, units = "in")
+```
+
+```{r fig.width=3, fig.height=3}
+# Test - filter out chr17 inversion
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  inner_join(fpQTLs %>% select(variant_id, variant_chrom, variant_pos), by = join_by(variant_id)) %>%
+  filter((variant_chrom == "chr17" & variant_pos > 4.55e7 & variant_pos < 4.64e7)) %>%
+  mutate(concordant = sign(delta_score) == sign(linear_beta)) 
+
+# it only filters out 3 points
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  inner_join(fpQTLs %>% select(variant_id, variant_chrom, variant_pos), by = join_by(variant_id)) %>%
+  filter(!(variant_chrom == "chr17" & variant_pos > 4.55e7 & variant_pos < 4.64e7)) %>%
+  mutate(concordant = sign(delta_score) == sign(linear_beta)) %>%
+  ggplot(aes(x = abs(delta_score), y = linear_beta * sign(delta_score))) +
+  geom_point(aes(color = concordant), size = 1.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  scale_color_manual(name = "", values = c("grey","#638eca"),
+                     labels = c("discordant", "concordant"), guide = "none") +
+  xlab("Absolute Δ motif score") +
+  ylab("fpQTL linear effect size \n(relative to stronger motif)") +
+  stat_cor(method = "spearman", label.y = -0.23, label.x = 4, label.x.npc = 0.55, size = 3.5) +
+  theme_classic()
+```
+
+
+
+
+- binomial test for every motif
+```{r}
+# motif_summary %>%
+#   filter(concordant_q < 0.1)
+# 
+# motif_summary %>%
+#   arrange(concordant_q)
+```
+
+Are fpQTLs more likely than not to be concordant? (beta has same sign as delta_score)
+- combined binomial test
+```{r}
+concordance <- motif_matches_chip_only %>%
+  dplyr::filter(fpQTL) %>%
+  mutate(concordant = sign(delta_score) == sign(linear_beta)) %>%
+  pull(concordant) %>%
+  table()
+
+bt <- binom.test(concordance["TRUE"], sum(concordance), p = 0.5)
+bt
+bt$p.value
+
+motif_summary_chip_only$num_match_fpQTL_concordant %>% sum()
+motif_summary_chip_only$num_match_fpQTL %>% sum()
+```
+
+
+```{r}
+concordance <- motif_matches_chip_only %>%
+  dplyr::filter(fpQTL) %>%
+  dplyr::filter(abs(delta_score) > 5) %>%
+  mutate(concordant = sign(delta_score) == sign(linear_beta)) %>%
+  pull(concordant) %>%
+  table()
+
+bt <- binom.test(concordance["TRUE"], sum(concordance), p = 0.5)
+bt
+bt$p.value
+```
+
+```{r}
+motif_matches_chip_only %>%
+  dplyr::filter(fpQTL) %>%
+  mutate(concordant = sign(delta_score) == sign(beta)) %>%
+  dplyr::filter(concordant) %>%
+  arrange(-abs(delta_score)) ->
+  concordant_fpQTLs
+
+concordant_fpQTLs %>%
+  write.table("concordant_fpQTLs/%s/%s_concordant_fpQTLs.txt" %>% sprintf(MOTIF_THRESHOLD, FP_METHOD), 
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+
+
+Concordance plot
+```{r fig.width=5, fig.height=4}
+filter_out <- c("MA1930.1_CTCF", "MA1929.1_CTCF")
+
+for (COUNT_CUTOFF in 2:4) {
+  motif_summary_chip_only %>%
+    filter(num_match_fpQTL < COUNT_CUTOFF) %>%
+    mutate(num_match_fpQTL_discordant = num_match_fpQTL - num_match_fpQTL_concordant) ->
+    df
+
+  other_discordant <- sum(df$num_match_fpQTL_discordant)
+  other_concordant <- sum(df$num_match_fpQTL_concordant)
+  
+  motif_summary_chip_only %>%
+    filter(num_match_fpQTL >= COUNT_CUTOFF, !(motif_id %in% filter_out)) %>%
+    arrange(-num_match_fpQTL) %>%
+    mutate(
+      motif_id = factor(motif_id, levels = c(motif_id, "Other")),
+      num_match_fpQTL_discordant = num_match_fpQTL - num_match_fpQTL_concordant
+    ) %>%
+    select(motif_id, num_match_fpQTL_concordant, num_match_fpQTL_discordant) %>%
+    rbind(list("Other", other_concordant, other_discordant)) %>%
+    pivot_longer(c("num_match_fpQTL_concordant", "num_match_fpQTL_discordant"), 
+                 names_to = "concordance", values_to = "num_fpQTLs") %>%
+    mutate(concordance = fct_rev(concordance)) %>%
+    ggplot(aes(x = motif_id, y = num_fpQTLs, fill = concordance)) +
+    geom_bar(stat = "identity") +
+    ylab("Number of fpQTLs") +
+    xlab("Motif") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.position = "top", plot.margin = margin(2, 2, 2, 10)) +
+    scale_fill_manual(name = "", labels = c("discordant", "concordant"),
+                      values = c("grey", "#638eca"))
+  
+  ggsave(sprintf("figures/%s/%s/%s_concordance_bar_plot_cutoff=%d.png", 
+                 MOTIF_THRESHOLD, FP_METHOD, FP_METHOD, COUNT_CUTOFF),
+         width = 5, height = 4, units = "in")
+}
+
+
+```
+
+```{r}
+motif_summary_chip_only %>%
+  filter(TFs_with_chip_data == "CTCF")
+```
+
+# MANUSCRIPT - Figure 3B (p=5e-4, COUNT_CUTOFF=5)
+```{r fig.width=3.8, fig.height=3.5}
+for (COUNT_CUTOFF in 3:5) { 
+  filter_out <- c("MA0139.2_CTCF", "MA1929.2_CTCF", "MA1930.2_CTCF")
+  
+  motif_summary_chip_only %>%
+    separate(motif_id, into = c("motif_number", "motif_id"), sep = "_") %>%
+    group_by(motif_id) %>%
+    summarise(
+      num_match_fpQTL = sum(num_match_fpQTL),
+      num_match_fpQTL_concordant = sum(num_match_fpQTL_concordant)
+    ) %>% 
+    filter(num_match_fpQTL < COUNT_CUTOFF) %>%
+    mutate(num_match_fpQTL_discordant = num_match_fpQTL - num_match_fpQTL_concordant) ->
+    df
+  
+  other_discordant <- sum(df$num_match_fpQTL_discordant)
+  other_concordant <- sum(df$num_match_fpQTL_concordant)
+  
+  motif_summary_chip_only %>%
+    filter(!(motif_id %in% filter_out)) %>%
+    separate(motif_id, into = c("motif_number", "motif_id"), sep = "_") %>%
+    group_by(motif_id) %>%
+    summarise(
+      num_match_fpQTL = sum(num_match_fpQTL),
+      num_match_fpQTL_concordant = sum(num_match_fpQTL_concordant)
+    ) %>%
+    filter(num_match_fpQTL >= COUNT_CUTOFF) %>%
+    arrange(-num_match_fpQTL) %>%
+    mutate(
+      motif_id = factor(motif_id, levels = c(motif_id, "Other")),
+      num_match_fpQTL_discordant = num_match_fpQTL - num_match_fpQTL_concordant
+    ) %>%
+    select(motif_id, num_match_fpQTL_concordant, num_match_fpQTL_discordant) %>%
+    rbind(list("Other", other_concordant, other_discordant)) %>%
+    pivot_longer(c("num_match_fpQTL_concordant", "num_match_fpQTL_discordant"), 
+                 names_to = "concordance", values_to = "num_fpQTLs") %>%
+    mutate(concordance = fct_rev(concordance)) %>%
+    ggplot(aes(x = motif_id, y = num_fpQTLs, fill = concordance)) +
+    geom_bar(stat = "identity") +
+    ylab("# of overlapping fpQTLs") +
+    xlab("Motif class") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.position = "top", plot.margin = margin(2, 2, 2, 10)) +
+    scale_fill_manual(name = "", labels = c("discordant", "concordant"),
+                      values = c("grey", "#638eca"))
+  
+  ggsave(sprintf("figures/%s/%s/%s_concordance_bar_plot_cutoff=%d_groupd.png", 
+                 MOTIF_THRESHOLD, FP_METHOD, FP_METHOD, COUNT_CUTOFF),
+         width = 3.8, height = 3.5, units = "in")
+}
+```
+
+
+
+
+```{r}
+# How many fpQTLs overlap motifs?
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  pull(variant_id) %>%
+  unique() %>%
+  length()
+
+# How many fpQTL overlaps are there total?
+motif_matches_chip_only %>%
+  filter(fpQTL) %>%
+  nrow()
+
+# How many different motifs contain at least 1 fpQTL?
+motif_summary_chip_only %>%
+  filter(num_match_fpQTL > 0) %>%
+  nrow()
+
+# How many different TFs are represented by motifs with at least 1 fpQTL?
+motif_summary_chip_only %>%
+  filter(num_match_fpQTL > 0) %>%
+  separate_rows(TFs_with_chip_data, sep=";") %>%
+  pull(TFs_with_chip_data) %>%
+  unique() %>%
+  length()
+```
+
+# Part 2: motifs without chip data
+
+Filter the motifs by TFs that are expressed in liver
+```{r}
+liver_GTEx_median_tpm <- read.delim(paste0(ROOT_DIR, "raw_data/GTEx/GTEx_v8_liver_median_tpm.txt"))
+
+liver_GTEx_median_tpm %>%
+  filter(Liver > 0) %>%
+  pull(Description) %>%
+  toupper() ->
+  liver_expressed_genes
+```
+
+```{r}
+motif_summary %>%
+  select(motif_id) %>%
+  separate(motif_id, into = c(NA, "tf_name"), sep = "_", remove = FALSE) %>%
+  mutate(tf_name = toupper(tf_name)) %>%
+  separate_rows(tf_name, sep = "::") %>%
+  filter(tf_name %in% liver_expressed_genes) %>%
+  pull(motif_id) %>%
+  unique() ->
+  liver_expressed_motifs
+
+head(liver_expressed_motifs)
+```
+
+```{r}
+# Filter motif results by liver expressed motifs
+motif_summary_no_chip <- motif_summary %>%
+  filter(motif_id %in% liver_expressed_motifs, is.na(TFs_with_chip_data)) %>%
+  mutate(
+    fpQTL_match_q = qvalue(fpQTL_match_p, lfdr.out = FALSE)$qvalues,
+    significant = fpQTL_match_q < 0.05,
+    concordant_q = qvalue(concordant_p, lfdr.out = FALSE)$qvalues
+  )
+
+motif_matches_no_chip <- motif_matches %>%
+  filter(motif_id %in% liver_expressed_motifs, 
+         motif_id %in% motif_summary_no_chip$motif_id)
+```
+
+
+# How many motifs are significant (at FDR 5)?
+```{r}
+motif_summary_no_chip %>%
+  count(significant)
+
+motif_summary_no_chip %>%
+  count(fpQTL_match_OR > 1)
+```
+
+
+
+# Are fpQTLs more likely than other variants to overlap a SPECIFIC motif? (separated by motifs)
+```{r fig.width=5, fig.height=7}
+# Order motifs by OR
+motif_summary_no_chip %>%
+  filter(fpQTL_match_q < 0.15 & fpQTL_match_OR > 1) %>%
+  arrange(fpQTL_match_OR) %>%
+  pull(motif_id) ->
+  motif_order
+
+motif_summary_no_chip %>%
+  filter(fpQTL_match_q < 0.15 & fpQTL_match_OR > 1) %>%
+  mutate(
+    motif_id = factor(motif_id, levels = motif_order),
+  ) %>%
+  ggplot(aes(x = fpQTL_match_OR, y = motif_id, color = -log10(fpQTL_match_p))) +
+  geom_pointrange(aes(xmin = fpQTL_match_OR_95_low, xmax = fpQTL_match_OR_95_high)) +
+  geom_point(data = . %>% filter(significant, -log10(fpQTL_match_p) <= 5), shape = "*", color = "black", size = 3) +
+  geom_point(data = . %>% filter(significant, -log10(fpQTL_match_p) > 5), shape = "*", color = "white", size = 3) +
+  geom_vline(xintercept = 1) +
+  scale_color_viridis(option = "plasma", direction = -1,
+                       name = bquote(-log[10](p))) +
+  scale_x_log10() +
+  xlab("fpQTL-motif enrichment odds ratio") +
+  ylab("Motif ID") +
+  theme_bw()
+
+ggsave(sprintf("figures/%s/%s/%s_fpQTL-motif_no_chip_odds_ratio.png", 
+               MOTIF_THRESHOLD, FP_METHOD, FP_METHOD),
+       width = 5, height = 7, units = "in")
+```
+
+
+# Are fpQTLs more likely than other variants to overlap ANY motif?
+```{r}
+sample_results <- readRDS(paste0("motif_results/", MOTIF_THRESHOLD, "/MA1489.1_FOXN3.Rds"))
+regression_results <- readRDS(paste0("../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+if (grepl("local_cutsites_geq10", FP_METHOD, fixed = TRUE)) {
+  Q_THRESHOLD <- 0.10
+} else {
+  Q_THRESHOLD <- 0.05
+}
+
+regression_results %>%
+  # Only consider variants we have results for
+  filter(variant_id %in% sample_results$variant_id) %>%
+  mutate(
+    fpQTL = ST_qval < Q_THRESHOLD,
+    any_match = variant_id %in% motif_matches_no_chip$variant_id
+  ) ->
+  regression_results
+```
+
+
+```{r}
+regression_results %>%
+  count(fpQTL, any_match) %>%
+  pull(n) %>%
+  matrix(nrow = 2, dimnames = list(
+    c("no match", "motif match"),
+    c("non-fpQTL", "fpQTL")
+  )) ->
+  m
+
+m
+
+fisher.test(m)
+```
+
+# MANUSCRIPT - Supplementary Table 3 - p=5e-4
+```{r}
+motif_summary %>%
+  arrange(TFs_with_chip_data) %>%
+  separate(motif_id, into = c("JASPAR ID", "Motif Name"), sep = "_") %>%
+  # Blank out columns for motifs with ChiP-data
+  mutate(
+    num_matches = ifelse(!is.na(TFs_with_chip_data), "", num_matches),
+    fpQTL_match_OR = ifelse(!is.na(TFs_with_chip_data), "", fpQTL_match_OR),
+    fpQTL_match_p = ifelse(!is.na(TFs_with_chip_data), "", fpQTL_match_p),
+    concordant_prob = replace_na(as.character(concordant_prob), ""),
+    concordant_p = replace_na(as.character(concordant_p), ""),
+    TFs_with_chip_data = replace_na(TFs_with_chip_data, "")
+  ) %>%
+  select(-num_fpQTLs) %>%
+  dplyr::rename(
+    `TF (with ChIP data)` = TFs_with_chip_data,
+    `# overlapping SNPs` = num_matches, `# overlapping fpQTLs` = num_match_fpQTL,
+    `# CONCORDANT overlapping fpQTLs` = num_match_fpQTL_concordant,
+    `fpQTL match OR` = fpQTL_match_OR, `fpQTL match P` = fpQTL_match_p,
+    `Proportion concordant` = concordant_prob, `Concordant P` = concordant_p
+  ) %>% 
+  select(everything(), -contains("95")) %>%
+  write.table("%s_motif_supplementary_table_p=%s.txt" %>% sprintf(FP_METHOD, MOTIF_THRESHOLD),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+
+
+

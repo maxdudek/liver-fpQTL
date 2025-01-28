@@ -1,0 +1,143 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qvalue)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+```
+
+```{r}
+per_allele_allelic_FP_scores <- read.delim("allelic_FP_scores_per_sample/%s_allelic_FP_scores_per_sample.txt" %>% sprintf(FP_METHOD))
+
+fpQTLs <- read.delim("../../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR5.txt" %>% sprintf(FP_METHOD))
+
+# For linear regression
+if (!grepl("PRINT_beta", FP_METHOD, fixed = TRUE)) {
+  fpQTLs$linear_beta <- fpQTLs$beta
+}
+```
+
+
+# Consolidate alleles from same sample
+```{r}
+per_sample_allelic_FP_scores <- per_allele_allelic_FP_scores %>%
+  dplyr::filter(variant_id != "rs61968021") %>% # PRINT didn't like this variant (alt n = 3)
+  pivot_wider(names_from = allele, values_from = FP_score) %>%
+  dplyr::filter(!is.na(ref), !is.na(alt))
+
+per_variant_allelic_FP_scores <- per_sample_allelic_FP_scores %>%
+  group_by(variant_id) %>%
+  summarize(
+    n = n(), # Number of heterozygous samples with at least one ref and one alt insertion
+    mean_ref_FP_score = mean(ref),
+    mean_alt_FP_score = mean(alt),
+    delta_mean_FP_score = mean_alt_FP_score - mean_ref_FP_score,
+    mean_sample_FP_score = mean(alt-ref), # same as above
+    median_ref_FP_score = median(ref),
+    median_alt_FP_score = median(alt),
+    delta_median_FP_score = median_alt_FP_score - median_ref_FP_score,
+    paired_wilcox_pvalue = wilcox.test(ref, alt, paired = TRUE)$p.value
+  )
+
+```
+
+```{r}
+per_variant_allelic_FP_scores <- per_variant_allelic_FP_scores %>%
+  inner_join(fpQTLs, by = join_by(variant_id)) %>%
+  mutate(
+    paired_wilcox_qvalue = qvalue(paired_wilcox_pvalue, lambda = 0)$qvalues,
+    allele_specific_significant = paired_wilcox_qvalue < 0.05,
+    concordant = sign(linear_beta) == sign(delta_median_FP_score)
+  ) %>%
+  arrange(allele_specific_significant)
+
+per_variant_allelic_FP_scores %>%
+  arrange(paired_wilcox_qvalue) %>%
+  dplyr::filter(paired_wilcox_qvalue < 0.05)
+```
+
+```{r fig.width=3, fig.height=3}
+per_variant_allelic_FP_scores %>%
+  mutate(allele_specific_significant = paired_wilcox_qvalue < 0.05) %>%
+  arrange(allele_specific_significant) %>%
+  ggplot(aes(x = delta_median_FP_score, y = linear_beta, color = allele_specific_significant)) +
+  geom_point(size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  ylim(c(-0.35, 0.35)) +
+  xlim(c(-0.3, 0.3)) +
+  ylab("Across-sample effect size") +
+  xlab("Within sample allelic \u0394median FP score") +
+  coord_equal() +
+  scale_color_manual(name = "Allele-specific\nsignificance", values = c("black", "purple")) +
+  theme_classic()
+```
+
+# MANUSCRIPT - Supplemental figure
+```{r fig.width=4, fig.height=3}
+COLORS <- c("#808080", "#5b1e79")
+
+per_variant_allelic_FP_scores %>%
+  mutate(
+    x = abs(linear_beta),
+    y = delta_mean_FP_score*sign(linear_beta),
+    concordant = sign(linear_beta) == sign(delta_mean_FP_score),
+    allele_specific_significant = paired_wilcox_qvalue < 0.05
+  ) %>%
+  ggplot(aes(x = x, y = y, color = concordant, 
+             group = 1, shape = allele_specific_significant)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 1) +
+  scale_color_manual(values = COLORS) +
+  scale_shape_manual(values = c(16,8), name = "Wilcox-paired\nsignificance") +
+  xlab("Absolute linear effect size") +
+  ylab("\u0394 mean allelic FP score\n(relative to bound allele)") +
+  ylim(c(-0.24, 0.24)) +
+  theme_classic() +
+  stat_cor(method = "spearman", aes(x, y,
+           # label = paste(after_stat(r.label), after_stat(p.label), sep = "~`,`~")
+           ),
+           label.sep = "\n", size = 3, label.y = 0.2, label.x = 0.2, label.x.npc = "left", show.legend=FALSE)
+ggsave("figures/%s/%s_delta_mean_allelic_FP_score.png" %>% sprintf(FP_METHOD, FP_METHOD),
+       width = 4, height = 3, units = "in")
+```
+
+
+
+```{r}
+per_variant_allelic_FP_scores %>%
+  filter(allele_specific_significant) %>%
+  count(concordant)
+
+binom.test(48, 20+48)
+```
+
+
+```{r}
+per_allele_allelic_FP_scores %>%
+  group_by(variant_id, sample) %>%
+  filter(row_number() > 2) %>%
+  arrange(variant_id, sample)
+
+
+per_allele_allelic_FP_scores %>%
+  filter(variant_id == "rs61968021")
+```
+
+```{r}
+rsID <- "rs61968021"
+allele <- "alt"
+rsID_allele <- paste(rsID, allele, sep = "_")
+pathToFrags <- paste0("allelic_fragments/", rsID_allele, ".tsv")
+    
+frags_df <- read.table(pathToFrags)
+het_samples <- frags_df %>% pull(V4) %>% unique()
+n <- length(het_samples)
+```
+
+
+
+

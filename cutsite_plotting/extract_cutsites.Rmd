@@ -1,0 +1,121 @@
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+})
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_local_cutsites_geq10"
+DIR <- paste0("../regression/FP_methods/", FP_METHOD)
+cat("FP_METHOD = ", FP_METHOD, "\n")
+```
+
+```{r}
+fpQTLs <- read.delim(paste0(DIR, "/regression_results/fpQTLs_covariates_FDR5.txt"))
+variant_info <- variant_info <- readRDS("../regression/variant_info.Rds")
+fpscore_matrix <- readRDS(paste0(DIR, "/data/fpscore_matrix_normalized_fpQTLs_with_covariates.Rds"))
+genotype_matrix <- readRDS(paste0(DIR, "/data/genotype_matrix_fpQTLs_with_covariates.Rds"))
+variant_predBias <- readRDS("../PRINT/variant_predBias.rds")
+REGION_SIZE <- ncol(variant_predBias)
+W <- REGION_SIZE %/% 2
+```
+
+```{r}
+CHUNK_SIZE <- 1e5
+NUM_VARIANTS <- min(nrow(fpQTLs), 50)
+
+variants <- fpQTLs$variant_id[1:NUM_VARIANTS]
+rs <- variants[2]
+```
+
+```{r}
+# Get variant number
+i <- match(rs, variant_info$variant_id)
+
+# Get chunk number
+chunk <- ((i-1) %/% CHUNK_SIZE) + 1
+
+# Get position in chunk
+chunk_i <- i %% CHUNK_SIZE
+if (chunk_i == 0) {chunk_i <- CHUNK_SIZE} # R uses 1-indexing
+```
+
+```{r}
+# Get samples in regression
+variant_genotypes <- genotype_matrix[rs, ] %>% na.omit()
+samples <- names(variant_genotypes)
+variant_cutsites <- data.frame()
+
+s <- samples[3]
+g <- variant_genotypes[s]
+```
+
+```{r}
+# Load sample cutsites for variant
+countTensor <- readRDS(paste0("../PRINT/data/", s, "/chunkedCountTensor/chunk_", chunk, ".rds"))
+# TFBSTensor <- readRDS(paste0("../PRINT/data/", s, "/chunkedTFBSResults/chunk_", chunk, ".rds"))
+
+region <- countTensor[[chunk_i]]
+# TFBS_result <- TFBSTensor[[chunk_i]]
+
+region_bias <- variant_predBias[i, ]
+
+
+raw_insertions <- rep(0, REGION_SIZE)
+raw_insertions[region$position] <- region$count
+
+expected_insertions <- region_bias/sum(region_bias) * sum(raw_insertions)
+corrected_insertions <- raw_insertions - expected_insertions
+
+sample_cutsites <- data.frame(
+  sample = s,
+  genotype = g,
+  position = -W:W,
+  num_insertions = raw_insertions,
+  bias = region_bias,
+  expected_insertions = expected_insertions,
+  corrected_insertions = corrected_insertions,
+  row.names = NULL
+)
+
+sample_cutsites
+
+```
+
+
+Load cutsites using TOBIAS, instead of PRINT
+```{r}
+library(bigWig)
+```
+
+
+```{r}
+# For variant rs and sample s
+
+rs.chr <- variant_info[i, "variant_chrom"] %>% gsub("chr", "", .)
+rs.pos <- variant_info[i, "variant_pos"]
+
+bw.filename <- paste0("../TOBIAS/ATACorrect/", s, "_uncorrected.bw")
+
+bw <- load.bigWig(bw.filename)
+
+query <- query.bigWig(bw, rs.chr, rs.pos-100, rs.pos+101)
+
+sample_cutsites_TOBIAS <- data.frame(
+  sample = s,
+  genotype = g,
+  position = query[,"end"] - rs.pos, # Use 'end' not 'start' because the bw is 0-indexed
+  num_insertions = as.integer(query[,"value"] / min(query[,"value"])),
+  row.names = NULL
+)
+
+sample_cutsites_TOBIAS
+
+```
+
+
+
+
+
+

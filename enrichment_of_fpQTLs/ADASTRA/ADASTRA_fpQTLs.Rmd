@@ -1,0 +1,55 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+dbSNP151_rsKey <- readRDS(paste0(ROOT_DIR, "footprinting/fpQTLs/misc/variant_ids/gencove_vcf_to_dbSNP155_key.Rds"))
+```
+
+
+Create dbSNP rsID files
+```{r}
+FP_METHODS <- c(
+    "PRINT_beta_cloglog", "PRINT_beta_logit"
+)
+
+for (FP_METHOD in FP_METHODS) {
+  print(FP_METHOD)
+  DIR <- paste0("../../regression/FP_methods/", FP_METHOD)
+  fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+  if (grepl("local_cutsites_geq10", FP_METHOD, fixed = TRUE)) {
+    Q_THRESHOLD <- 0.10
+  } else {
+    Q_THRESHOLD <- 0.05
+  }
+  
+  fpscore_cov_regression %>%
+    filter(ST_qval < Q_THRESHOLD) %>%
+    # Get dbSNP rsID, which might differ from original rsID
+    left_join(dbSNP151_rsKey, by = join_by(variant_id == original_rsID)) %>% 
+    separate(variant_id, into = c("variant_id", NA), sep = "_", fill = "right") %>% # "rsXXXXXX_2" --> "rsXXXXXX"
+    mutate(rsID.dbSNP = ifelse(is.na(rsID.dbSNP), variant_id, rsID.dbSNP)) %>%
+    pull(rsID.dbSNP) %>%
+    write(paste0("rsIDs/", FP_METHOD, "_fpQTLs_with_cov_rsIDs.txt"))
+}
+```
+
+
+```{r}
+ADASTRA <- read.delim(paste0(ROOT_DIR, "/raw_data/ChIP-seq/ADASTRA/AD_ASTRA_v5.1.3_liver_HepG2_hepatocytes.tsv"))
+
+ADASTRA %>%
+  dplyr::rename(ref_allele = Ref, alt_allele = Alt) %>%
+  mutate()
+```
+
+```{r}
+fpQTL_data %>%
+  left_join()
+```
+
+
+
+

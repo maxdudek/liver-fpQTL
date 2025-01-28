@@ -1,0 +1,373 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qqman)
+library(qvalue)
+library(GenomicRanges)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+fpQTLs <- read.delim(paste0("../../annotation/fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+
+regression_results %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+```
+
+
+```{r}
+chrom_lengths <- read.table(paste0(ROOT_DIR, "raw_data/genome/human.hg38.genome")) %>%
+  dplyr::rename(variant_chrom = V1, chrom_length = V2)
+
+chromosome_ends <- regression_results %>%
+  group_by(variant_chrom) %>%
+  summarise(
+    first_variant = min(variant_pos),
+    last_variant = max(variant_pos)
+  ) %>%
+  inner_join(chrom_lengths) %>%
+  mutate(diff = chrom_length - last_variant)
+```
+
+```{r}
+fpQTLs_telomeric <- fpQTLs %>%
+  inner_join(chromosome_ends) %>%
+  mutate(distance_to_end = pmin(variant_pos, chrom_length - variant_pos)) %>%
+  mutate(
+    telomeric_1Mb = variant_pos < 1e6 | variant_pos > chrom_length - 1e6,
+    telomeric_2Mb = variant_pos < 2e6 | variant_pos > chrom_length - 2e6,
+    telomeric_5Mb = variant_pos < 5e6 | variant_pos > chrom_length - 5e6,
+  )
+
+table(fpQTLs_telomeric$telomeric_1Mb)
+table(fpQTLs_telomeric$telomeric_2Mb)
+table(fpQTLs_telomeric$telomeric_5Mb)
+```
+
+```{r}
+# motif_matches <- readRDS(paste0("../../motif_analysis/motif_match_results/p=5e-4/", FP_METHOD, "_motif_matches.Rds"))
+# 
+# motif_matches_fpQTLs <- motif_matches %>%
+#   filter(variant_id %in% fpQTLs$variant_id)
+# 
+# motif_matches_fpQTLs %>% saveRDS("data/motif_matches_fpQTLs.Rds")
+```
+
+```{r}
+motif_matches_fpQTLs <- readRDS("data/motif_matches_fpQTLs.Rds")
+```
+
+# Filter for liver-expressed motifs
+```{r}
+liver_GTEx_median_tpm <- read.delim(paste0(ROOT_DIR, "raw_data/GTEx/GTEx_v8_liver_median_tpm.txt"))
+
+liver_GTEx_median_tpm %>%
+  filter(Liver > 0) %>%
+  pull(Description) %>%
+  toupper() ->
+  liver_expressed_genes
+
+motif_matches_fpQTLs %>%
+  select(motif_id) %>%
+  separate(motif_id, into = c(NA, "tf_name"), sep = "_", remove = FALSE) %>%
+  mutate(tf_name = toupper(tf_name)) %>%
+  separate_rows(tf_name, sep = "::") %>%
+  filter(tf_name %in% liver_expressed_genes) %>%
+  pull(motif_id) %>%
+  unique() ->
+  liver_expressed_motifs
+
+head(liver_expressed_motifs)
+# c("MA0734.3_Gli2", "MA1969.2_THRA", "MA0131.2_HINFP", 
+#   "MA0761.2_ETV1", "MA0474.3_Erg", "MA0081.2_SPIB") %in% liver_expressed_motifs
+```
+
+```{r}
+motif_ids <- unique(motif_matches_fpQTLs$motif_id)
+mID <- motif_ids[1]
+
+TELOMERIC_THRESHOLD <- 1 # in Mb
+
+for (TELOMERIC_THRESHOLD in c(1,2,5)) {
+  print(sprintf("Telomeric threshold = %d", TELOMERIC_THRESHOLD))
+
+  result <- data.frame()
+  for (mID in liver_expressed_motifs) {
+    # print(mID)
+    single_motif_matches <- motif_matches_fpQTLs %>% filter(motif_id == mID)
+  
+    temp <- fpQTLs_telomeric %>%
+      mutate(motif_overlap = variant_id %in% single_motif_matches$variant_id)
+    
+    # If no variants overlap the motif, skip the motif
+    if (sum(temp$motif_overlap) == 0) {
+      print("Skipping...")
+      next
+    }
+    
+    table2x2 <- table(temp$motif_overlap, temp[[sprintf("telomeric_%dMb", TELOMERIC_THRESHOLD)]])
+    
+    rownames(table2x2) <- c("no motif", "motif overlap")
+    colnames(table2x2) <- c("non-telomeric", "telomeric")
+    
+    telomeric_no_motif <- table2x2["no motif", "telomeric"]
+    telomeric_motif_overlap <- table2x2["motif overlap", "telomeric"]
+    non_telomeric_no_motif <- table2x2["no motif", "non-telomeric"]
+    non_telomeric_motif_overlap <- table2x2["motif overlap", "non-telomeric"]
+    
+    ft <- fisher.test(table2x2)
+      
+    df <- data.frame(
+      motif_id = mID,
+      telomeric_no_motif = telomeric_no_motif,
+      telomeric_motif_overlap = telomeric_motif_overlap,
+      non_telomeric_no_motif = non_telomeric_no_motif,
+      non_telomeric_motif_overlap = non_telomeric_motif_overlap,
+      odds_ratio = ft$estimate,
+      odds_ratio_95_low = ft$conf.int[1],
+      odds_ratio_95_high = ft$conf.int[2],
+      fishers_p = ft$p.value,
+      row.names = NULL
+    )
+    
+    result <- rbind(result, df)
+  }
+  
+  result %>%
+    write.table(sprintf("data/telomeric_%dMb_fpQTL_JASPAR_motif_enrichment.txt", TELOMERIC_THRESHOLD),
+                quote = FALSE, row.names = FALSE, sep = "\t")
+}
+```
+
+```{r}
+telomeric_motif_enrichment_1Mb <- read.delim("data/telomeric_1Mb_fpQTL_JASPAR_motif_enrichment.txt")
+telomeric_motif_enrichment_2Mb <- read.delim("data/telomeric_2Mb_fpQTL_JASPAR_motif_enrichment.txt")
+telomeric_motif_enrichment_5Mb <- read.delim("data/telomeric_5Mb_fpQTL_JASPAR_motif_enrichment.txt")
+
+telomeric_motif_enrichment_1Mb <- telomeric_motif_enrichment_1Mb %>%
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+telomeric_motif_enrichment_2Mb <- telomeric_motif_enrichment_2Mb %>%
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+telomeric_motif_enrichment_5Mb <- telomeric_motif_enrichment_5Mb %>%
+  mutate(ST_qval = qvalue(fishers_p, lambda = 0)$qvalues, significant = ST_qval < 0.05)
+```
+
+```{r}
+telomeric_motif_enrichment_1Mb %>% arrange(fishers_p)
+telomeric_motif_enrichment_2Mb %>% arrange(fishers_p)
+telomeric_motif_enrichment_5Mb %>% arrange(fishers_p)
+```
+
+
+```{r fig.height=6, fig.width=6}
+df <- telomeric_motif_enrichment_1Mb %>%
+  filter(!is.infinite(odds_ratio) & odds_ratio != 0 &
+           !is.infinite(odds_ratio_95_high) & odds_ratio_95_low != 0) %>%
+  filter(fishers_p < 0.01) 
+
+motif_order <- df %>% arrange(odds_ratio) %>% pull(motif_id)
+rev(motif_order)
+
+df %>%
+  mutate(motif_id = factor(motif_id, levels = motif_order)) %>%
+  ggplot(aes(x = odds_ratio, y = motif_id, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("Motif ID") +
+  ggtitle("Enrichment of motifs in fpQTLs < 1Mb from chrom end") +
+  theme_bw()
+```
+
+```{r fig.height=6, fig.width=6}
+df <- telomeric_motif_enrichment_2Mb %>%
+  filter(!is.infinite(odds_ratio) & odds_ratio != 0 &
+           !is.infinite(odds_ratio_95_high) & odds_ratio_95_low != 0) %>%
+  filter(fishers_p < 0.01) 
+
+motif_order <- df %>% arrange(odds_ratio) %>% pull(motif_id)
+rev(motif_order)
+
+df %>%
+  mutate(motif_id = factor(motif_id, levels = motif_order)) %>%
+  ggplot(aes(x = odds_ratio, y = motif_id, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("Motif ID") +
+  ggtitle("Enrichment of motifs in fpQTLs < 2Mb from chrom end") +
+  theme_bw()
+```
+
+```{r fig.height=6, fig.width=6}
+df <- telomeric_motif_enrichment_5Mb %>%
+  filter(!is.infinite(odds_ratio) & odds_ratio != 0 &
+           !is.infinite(odds_ratio_95_high) & odds_ratio_95_low != 0) %>%
+  filter(fishers_p < 0.01) 
+
+motif_order <- df %>% arrange(odds_ratio) %>% pull(motif_id)
+rev(motif_order)
+
+df %>%
+  mutate(motif_id = factor(motif_id, levels = motif_order)) %>%
+  ggplot(aes(x = odds_ratio, y = motif_id, color = -log10(fishers_p))) + 
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                      xmax = odds_ratio_95_high), size = 0.75) +
+  geom_point(data = . %>% filter(significant), shape = "*", 
+             color = "black", size = 4) +
+  scale_color_gradient(low = "gold", high = "purple",
+                       name = bquote(-log[10](p))) +
+  scale_x_log10(breaks = c(1, 3, 10)) +
+  xlab("Odds ratio") +
+  ylab("Motif ID") +
+  ggtitle("Enrichment of motifs in fpQTLs < 5Mb from chrom end") +
+  theme_bw()
+```
+
+
+```{r}
+chip_TFs <- fpQTLs %>%
+  filter(!is.na(liver_TF_ChIP)) %>%
+  separate_rows(liver_TF_ChIP, sep = ",") %>%
+  pull(liver_TF_ChIP) %>%
+  unique()
+
+"GLI2" %in% chip_TFs
+"THRA" %in% chip_TFs
+"HINFP" %in% chip_TFs
+"ETV1" %in% chip_TFs
+"ERG" %in% chip_TFs
+"SPIB" %in% chip_TFs
+
+```
+
+# Draw manhattan plots highlighting motif-overlapping variants
+```{r fig.width=14, fig.height=6}
+# Enriched motifs
+# motif_matches_fpQTLs_GLI2 <- motif_matches_fpQTLs %>% filter(motif_id == "MA0734.3_Gli2") %>% pull(variant_id)
+# png("figures/manhattan_plot_GLI2_motif.png", width = 21, height = 9, units = "in", res = 300)
+# regression_results %>%
+#   mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+#   manhattan(chr = "variant_chrom", bp = "variant_pos", 
+#             snp = "variant_id", p = "pval",
+#             highlight = motif_matches_fpQTLs_GLI2,
+#             suggestiveline = FALSE,
+#             genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+# dev.off()
+
+# motif_matches_fpQTLs_THRA <- motif_matches_fpQTLs %>% filter(motif_id == "MA1969.2_THRA") %>% pull(variant_id)
+# png("figures/manhattan_plot_THRA_motif.png", width = 21, height = 9, units = "in", res = 300)
+# regression_results %>%
+#   mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+#   manhattan(chr = "variant_chrom", bp = "variant_pos", 
+#             snp = "variant_id", p = "pval",
+#             highlight = motif_matches_fpQTLs_THRA,
+#             suggestiveline = FALSE,
+#             genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+# dev.off()
+
+motif_matches_fpQTLs_HINFP <- motif_matches_fpQTLs %>% filter(motif_id == "MA0131.2_HINFP") %>% pull(variant_id)
+png("figures/manhattan_plot_HINFP_motif.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = motif_matches_fpQTLs_HINFP,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+# Depleted motifs
+motif_matches_fpQTLs_ETV1 <- motif_matches_fpQTLs %>% filter(motif_id == "MA0761.2_ETV1") %>% pull(variant_id)
+png("figures/manhattan_plot_ETV1_motif.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = motif_matches_fpQTLs_ETV1,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+motif_matches_fpQTLs_ERG <- motif_matches_fpQTLs %>% filter(motif_id == "MA0474.3_Erg") %>% pull(variant_id)
+png("figures/manhattan_plot_ERG_motif.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = motif_matches_fpQTLs_ERG,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+
+motif_matches_fpQTLs_SPIB <- motif_matches_fpQTLs %>% filter(motif_id == "MA0081.2_SPIB") %>% pull(variant_id)
+png("figures/manhattan_plot_SPIB_motif.png", width = 21, height = 9, units = "in", res = 300)
+regression_results %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            highlight = motif_matches_fpQTLs_SPIB,
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+
+# Motif concordance
+```{r}
+enriched_motifs <- c("MA0734.3_Gli2", "MA1969.2_THRA", "MA0131.2_HINFP", "MA0761.2_ETV1", "MA0474.3_Erg", "MA0081.2_SPIB")
+
+enriched_motif_matches <- motif_matches_fpQTLs %>%
+  filter(motif_id %in% enriched_motifs) %>%
+  mutate(motif_id = factor(motif_id, levels = enriched_motifs)) %>%
+  mutate(concordant = sign(delta_score) == sign(beta)) %>%
+  inner_join(fpQTLs_telomeric %>% select(variant_id, starts_with("telomeric")))
+```
+
+```{r}
+pdf("figures/motif_concordance.pdf", width = 8, height = 6)
+enriched_motif_matches %>%
+  ggplot(aes(x = telomeric_1Mb, fill = concordant)) +
+  geom_bar() +
+  facet_wrap(~motif_id) +
+  scale_fill_manual(name = "", values = c("grey","#268bd2"),
+                     labels = c("discordant", "concordant")) +
+  theme_classic()
+
+enriched_motif_matches %>%
+  ggplot(aes(x = telomeric_2Mb, fill = concordant)) +
+  geom_bar() +
+  facet_wrap(~motif_id) +
+  scale_fill_manual(name = "", values = c("grey","#268bd2"),
+                     labels = c("discordant", "concordant")) +
+  theme_classic()
+
+enriched_motif_matches %>%
+  ggplot(aes(x = telomeric_5Mb, fill = concordant)) +
+  geom_bar() +
+  facet_wrap(~motif_id) +
+  scale_fill_manual(name = "", values = c("grey","#268bd2"),
+                     labels = c("discordant", "concordant")) +
+  theme_classic()
+dev.off()
+```
+

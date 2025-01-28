@@ -1,0 +1,36 @@
+The purpose of this notebook is to write a table of variants that we want to get 
+allele-specific reads for, which includes a list of samples that are heterozygous for each variant
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+DIR <- paste0("../regression/FP_methods/", FP_METHOD)
+fpQTLs <- read.delim(paste0(DIR, "/regression_results/fpQTLs_covariates_FDR5.txt"))
+genotype_matrix <- readRDS(paste0(DIR, "/data/genotype_matrix_fpQTLs_with_covariates.Rds"))
+```
+
+```{r}
+get_het_samples <- function(rsID) {
+  which(genotype_matrix[rsID,] == 1) %>%
+    names() %>%
+    paste(collapse = ",")
+}
+
+fpQTLs_het_samples <- fpQTLs %>%
+  rowwise() %>%
+  mutate(het_samples = get_het_samples(variant_id)) %>%
+  ungroup() %>%
+  select(variant_id, variant_chrom, variant_pos, ref_allele, alt_allele, pval, het_samples)
+```
+
+```{r}
+fpQTLs_het_samples %>%
+  write.table(sprintf("het_samples/%s_fpQTLs_het_samples.txt", FP_METHOD),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+

@@ -1,0 +1,168 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(BSgenome)
+```
+
+```{r}
+diff_reads_minus <- read.table("fragments/diff_reads.strand-.txt.gz" %>% gzfile(), header = TRUE)
+diff_reads_plus <- read.table("fragments/diff_reads.strand+.txt.gz" %>% gzfile(), header = TRUE)
+
+same_reads_minus <- read.table("fragments/same_reads.strand-.txt.gz" %>% gzfile(), header = TRUE)
+same_reads_plus <- read.table("fragments/same_reads.strand+.txt.gz" %>% gzfile(), header = TRUE)
+```
+
+```{r}
+records <- readDNAStringSet("/mnt/isilon/sfgi/referenceSequences/hg38/hg38.fa", format="fasta")
+
+```
+
+```{r}
+diff_reads_minus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = start1-15,
+    end = start1+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand-.start1.txt.gz" %>% gzfile())
+
+diff_reads_minus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = end1-15,
+    end = end1+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand-.end1.txt.gz" %>% gzfile())
+
+diff_reads_minus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = start2-15,
+    end = start2+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand-.start2.txt.gz" %>% gzfile())
+
+diff_reads_minus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = end2-15,
+    end = end2+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand-.end2.txt.gz" %>% gzfile())
+```
+
+```{r}
+diff_reads_plus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = start1-15,
+    end = start1+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand+.start1.txt.gz" %>% gzfile())
+
+diff_reads_plus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = end1-15,
+    end = end1+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand+.end1.txt.gz" %>% gzfile())
+
+diff_reads_plus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = start2-15,
+    end = start2+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand+.start2.txt.gz" %>% gzfile())
+
+diff_reads_plus %>%
+  mutate(
+    chrom = paste0("chr", chr),
+    start = end2-15,
+    end = end2+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/diff_reads.strand+.end2.txt.gz" %>% gzfile())
+```
+
+
+```{r}
+data.frame(
+    chrom = paste0("chr", same_reads_plus$chr),
+    start = same_reads_plus$start-15,
+    end = same_reads_plus$start+15
+  ) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/same_reads.strand+.start.txt.gz" %>% gzfile())
+
+data.frame(
+    chrom = paste0("chr", same_reads_plus$chr),
+    start = same_reads_plus$end-15,
+    end = same_reads_plus$end+15
+  ) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/same_reads.strand+.end.txt.gz" %>% gzfile())
+```
+
+
+```{r}
+data.frame(
+    chrom = paste0("chr", same_reads_minus$chr),
+    start = same_reads_minus$start-15,
+    end = same_reads_minus$start+15
+  ) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/same_reads.strand-.start.txt.gz" %>% gzfile())
+
+data.frame(
+    chrom = paste0("chr", same_reads_minus$chr),
+    start = same_reads_minus$end-15,
+    end = same_reads_minus$end+15
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(records, .) %>%
+  as.character() %>%
+  write("seqs/same_reads.strand-.end.txt.gz" %>% gzfile())
+```
+
+
+
+

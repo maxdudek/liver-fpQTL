@@ -1,0 +1,76 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(BSgenome)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+hg38 <- readDNAStringSet(paste0(ROOT_DIR, "raw_data/genome/Homo_sapiens.GRCh38.dna.primary_assembly.fa"))
+names(hg38)[1:22] <- as.character(1:22) %>% sort() %>% paste0("chr", .)
+```
+
+
+```{r}
+variant_info <- readRDS("../regression/variant_info.Rds")
+```
+
+```{r}
+# The largest JASPAR motif has width 35 bp, so we capture 34 bp on either side to include all possible positions of the variant
+radius <- 34
+
+# Extract sequences
+variant_info %>%
+  mutate(
+    chrom = variant_chrom,
+    start = variant_pos-radius,
+    end = variant_pos+radius
+  ) %>%
+  select(chrom, start, end) %>%
+  as("GRanges") %>%
+  getSeq(hg38, .) %>%
+  as.character() ->
+  seqs
+
+seq.df <- data.frame(
+  variant_id = variant_info$variant_id,
+  ref_allele = variant_info$ref_allele,
+  alt_allele = variant_info$alt_allele,
+  seq = seqs,
+  seq_center = seqs %>% sapply(substr, radius+1, radius+1)
+)
+
+# Get alternate sequence allele for replacement
+seq.df %>%
+  filter(ref_allele == seq_center | alt_allele == seq_center) %>%
+  mutate(
+    seq_center_alt = ifelse(ref_allele == seq_center, alt_allele, ref_allele),
+    seq_alt = seq
+  ) ->
+  seq.df
+
+# Create alternate sequence
+str_sub(seq.df$seq_alt, radius+1, radius+1) <- seq.df$seq_center_alt
+
+# Place alternate sequence in the correct spot - it may contain the ref_allele from variant_info
+seq.df %>%
+  mutate(
+    ref_seq = ifelse(ref_allele == seq_center, seq, seq_alt),
+    alt_seq = ifelse(ref_allele == seq_center, seq_alt, seq)
+  ) %>%
+  select(variant_id, ref_seq, alt_seq) ->
+  seq.df
+
+seq.df %>% saveRDS("variant_seqs.Rds")
+```
+
+```{r}
+seq.df <- readRDS("variant_seqs.Rds")
+
+
+```
+
+```{r}
+seq.df %>%
+  filter(variant_id == "rs11710930")
+```
+

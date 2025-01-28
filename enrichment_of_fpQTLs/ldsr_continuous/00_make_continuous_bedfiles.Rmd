@@ -1,0 +1,47 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHODS <- c("PRINT_beta_cloglog", "PRINT_beta_logit", "PRINT_no_gaussian")
+
+for (FP_METHOD in FP_METHODS) {
+  cat("FP METHOD = %s\n" %>% sprintf(FP_METHOD))
+
+  regression_results <- 
+    readRDS("../../regression/FP_methods/%s/regression_results/fp_score_covariates_genotype_regression.Rds" %>%
+            sprintf(FP_METHOD))
+  
+  bed_data <- regression_results %>%
+    dplyr::rename(
+      chrom = variant_chrom,
+      end = variant_pos
+    ) %>%
+    mutate(start = end - 1) %>%
+    mutate(log10p = -log10(pval)) %>%
+    select(chrom, start, end, log10p) %>%
+    arrange(chrom, start)
+  
+  # Nominally significant SNPs only
+  annot <- paste0(FP_METHOD, "_nominal")
+  dir.create(file.path("annotations", annot), showWarnings = FALSE)
+  
+  tmp <- bed_data %>%
+    filter(log10p > -log10(0.05)) 
+  cat("\tN SNPs nominal = %d\n" %>% sprintf(nrow(tmp)))
+  tmp %>%
+    write.table("annotations/%s/%s.bed" %>% sprintf(annot, annot),
+                sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+  
+  # ALL SNPs
+  annot <- paste0(FP_METHOD, "_all")
+  dir.create(file.path("annotations", annot), showWarnings = FALSE)
+  
+  bed_data %>%
+    write.table("annotations/%s/%s.bed" %>% sprintf(annot, annot),
+                sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+}
+
+```
+

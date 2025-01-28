@@ -1,0 +1,66 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+# Summary stats
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+dir.create("zenado_uploads/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+DIR <- paste0(ROOT_DIR, "footprinting/fpQTLs/regression/FP_methods/", FP_METHOD)
+
+summary_stats <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+```
+
+```{r}
+summary_stats %>%
+  mutate(Significant = ifelse(ST_qval < 0.05, 1, 0)) %>%
+  dplyr::select(
+    variant_id, variant_chrom, variant_pos, beta, r_squared, pval,
+    ref_allele, alt_allele, genotype0_counts, genotype1_counts, genotype2_counts, maf,
+    ST_qval, Significant
+  ) %>%
+  dplyr::rename(
+    SNP = variant_id, `Effect Size` = beta, `R2` = r_squared, P = pval,
+    CHROM = variant_chrom, POS_hg38 = variant_pos, REF = ref_allele, ALT = alt_allele, MAF = maf,
+    `N Genotype 0` = genotype0_counts, `N Genotype 1` = genotype1_counts, `N Genotype 2` = genotype2_counts,
+    Q = ST_qval
+  ) %>%
+  write.table("zenado_uploads/%s/liver_fpQTL_summary_stats.txt.gz" %>% sprintf(FP_METHOD) %>% gzfile(),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+
+# FP score matrix
+```{r}
+fp_score_matrix <- readRDS(paste0(ROOT_DIR, "footprinting/fpQTLs/PRINT/consolidated_results/PRINT_fpscore_matrix.Rds"))
+```
+
+
+```{r}
+fp_score_matrix %>%
+  write.table("zenado_uploads/%s/PRINT_fpscore_matrix.csv.gz" %>% sprintf(FP_METHOD) %>% gzfile(),
+              quote = FALSE, sep = ",")
+```
+
+```{r}
+fp_score_matrix[1:10, 1:10] %>%
+  write.table("test.csv", quote = FALSE, sep = ",")
+```
+
+# Genotype matrix
+```{r}
+genotype_matrix <- readRDS(paste0(ROOT_DIR, "footprinting/fpQTLs/regression/FP_methods/PRINT_no_gaussian/data/genotype_matrix_regression.Rds"))
+```
+
+```{r}
+dim(fp_score_matrix)
+dim(genotype_matrix)
+```
+
+```{r}
+genotype_matrix %>%
+  write.table("zenado_uploads/%s/genotype_matrix.csv.gz" %>% sprintf(FP_METHOD) %>% gzfile(),
+              quote = FALSE, sep = ",")
+```
+

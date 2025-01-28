@@ -1,0 +1,476 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(scales)
+library(GWASTools)
+library(qqman)
+library(ggpubr)
+library(MKpower)
+library(lattice)
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+```
+
+
+```{r}
+DIR <- paste0("FP_methods/", FP_METHOD)
+cat("FP_METHOD = ", FP_METHOD, "\n")
+
+cat("Loading data...\n")
+fpscore_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_genotype_regression.Rds"))
+fpscore_cov_regression <- readRDS(paste0(DIR, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+variant_info <- readRDS(paste0(DIR, "/data/variant_info_regression.Rds"))
+
+fpscore_regression %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_no_cov
+
+fpscore_cov_regression %>%
+  filter(ST_qval < 0.05) %>%
+  pull(pval) %>%
+  max() ->
+  ST_FDR5_p_thresh_with_cov
+
+```
+
+```{r}
+# Write FDR5 variant table
+fpscore_regression %>%
+  filter(ST_qval < 0.05) %>%
+  dplyr::select(-c(ST_lfdr)) %>%
+  arrange(ST_qval) %>%
+  write.table(file = paste0(FP_METHOD, "/regression_results/fpQTLs_FDR5.txt"),
+              quote = F,
+              row.names = F,
+              sep = "\t")
+
+# Write FDR5 variant table
+fpscore_cov_regression %>%
+  filter(ST_qval < 0.05) %>%
+  dplyr::select(-c(ST_lfdr)) %>%
+  arrange(ST_qval) %>%
+  write.table(file = paste0(FP_METHOD, "/regression_results/fpQTLs_covariates_FDR5.txt"),
+              quote = F,
+              row.names = F,
+              sep = "\t")
+```
+
+
+```{r}
+fpscore_regression %>%
+  ggplot(aes(x = pval)) +
+  xlim(c(0,1)) +
+  geom_histogram(bins = 50)
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_no_covariates/regression_pval_distribution.png"))
+
+fpscore_cov_regression %>%
+  ggplot(aes(x = pval)) +
+  xlim(c(0,1)) +
+  geom_histogram(bins = 50)
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_with_covariates/regression_pval_distribution.png"))
+```
+
+```{r}
+fpscore_regression %>%
+  ggplot(aes(x = ST_qval)) +
+  xlim(c(0,1)) +
+  geom_histogram(bins = 50)
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_no_covariates/regression_ST_qval_distribution.png"))
+
+fpscore_cov_regression %>%
+  ggplot(aes(x = ST_qval)) +
+  xlim(c(0,1)) +
+  geom_histogram(bins = 50)
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_with_covariates/regression_ST_qval_distribution.png"))
+```
+
+```{r}
+inflation <- function(ps) {
+  chisq <- qchisq(1 - ps, 1)
+  lambda <- median(chisq) / qchisq(0.5, 1)
+  lambda
+}
+```
+
+
+```{r fig.width=5, fig.height=5}
+# QQ plot
+ggplot() + 
+  stat_qq(aes(sample = -log10(fpscore_regression$pval)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave(paste0("FP_methods/", FP_METHOD, "/figures/regression_results_no_covariates/qqplot.png"),
+       width = 5, height = 5, units = "in")
+lambda_no_cov <- inflation(fpscore_regression$pval)
+
+# QQ plot
+ggplot() + 
+  stat_qq(aes(sample = -log10(fpscore_cov_regression$pval)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave(paste0("FP_methods/", FP_METHOD, "/figures/regression_results_with_covariates/qqplot.png"),
+       width = 5, height = 5, units = "in")
+lambda_with_cov <- inflation(fpscore_cov_regression$pval)
+```
+
+```{r fig.width=5, fig.height=5}
+# QQ plot with Genomic Control
+ggplot() + 
+  stat_qq(aes(sample = -log10(fpscore_regression$pval / lambda_no_cov)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave(paste0("FP_methods/", FP_METHOD, "/figures/regression_results_no_covariates/qqplot_GC.png"),
+       width = 5, height = 5, units = "in")
+
+# QQ plot
+ggplot() + 
+  stat_qq(aes(sample = -log10(fpscore_cov_regression$pval / lambda_with_cov)), 
+          color = "black", distribution = stats::qexp, dparams = list(rate = log(10))) + 
+  geom_abline(aes(slope = 1, intercept = 0), linetype = 2) +
+  ylab(bquote(Observed ~~ -log[10](p))) +
+  xlab(bquote(Expected ~~ -log[10](p))) +
+  theme_classic()
+ggsave(paste0("FP_methods/", FP_METHOD, "/figures/regression_results_with_covariates/qqplot_GC.png"),
+       width = 5, height = 5, units = "in")
+```
+
+
+<!-- QQ testing -->
+<!-- ```{r} -->
+<!-- MKpower::qqunif(fpscore_cov_regression$pval) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- lattice::qqmath(~-log10(fpscore_cov_regression$pval), -->
+<!--                 distribution=function(x){-log10(qunif(1-x))}) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # QQ plot -->
+<!-- png(file=paste0(FP_METHOD, "/figures/regression_results_no_covariates/qqplot.png")) -->
+<!-- qqPlot(fpscore_regression$pval) -->
+<!-- dev.off() -->
+
+<!-- # QQ plot -->
+<!-- png(file=paste0(FP_METHOD, "/figures/regression_results_with_covariates/qqplot.png")) -->
+<!-- qqPlot(fpscore_cov_regression$pval) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+```{r}
+# Volcano plot
+fpscore_regression %>%
+  ggplot(aes(x = beta, y = -log10(pval))) +
+  geom_point(size = 1) +
+  geom_abline(slope = 0, intercept = -log10(ST_FDR5_p_thresh), size = 0.3, color = "black") +
+  xlim(c(-1.5,1.5)) +
+  ylab(bquote(-log[10](p))) +
+  xlab("Effect slope (beta)")
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_no_covariates/volcano_plot.png"))
+
+fpscore_cov_regression %>%
+  ggplot(aes(x = beta, y = -log10(pval))) +
+  geom_point(size = 1) +
+  geom_abline(slope = 0, intercept = -log10(ST_FDR5_p_thresh), size = 0.3, color = "black") +
+  xlim(c(-1.5,1.5)) +
+  ylab(bquote(-log[10](p))) +
+  xlab("Effect slope (beta)")
+
+ggsave(paste0(FP_METHOD, "/figures/regression_results_with_covariates/volcano_plot.png"))
+```
+
+
+
+```{r}
+# Manhatten plot
+png(file=paste0(FP_METHOD, "/figures/regression_results_no_covariates/manhatten_plot.png"), width = 1200, height = 600)
+fpscore_regression %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            col = c("#ff5d00", "#0065ff"),
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh))
+dev.off()
+
+png(file=paste0("FP_methods/", FP_METHOD, "/figures/regression_results_with_covariates/manhatten_plot.png"), width = 1200, height = 600)
+fpscore_cov_regression %>%
+  mutate(variant_chrom = as.integer(gsub("chr", "", variant_chrom))) %>%
+  manhattan(chr = "variant_chrom", bp = "variant_pos", 
+            snp = "variant_id", p = "pval",
+            col = c("#ff5d00", "#0065ff"),
+            suggestiveline = FALSE,
+            genomewideline = -log10(ST_FDR5_p_thresh_with_cov))
+dev.off()
+```
+
+Investigate weird spikes in Manhattan plot
+```{r}
+fpscore_cov_regression %>%
+  filter(variant_chrom == "chr17") %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_point() +
+  xlim(c(4.6e7, 4.63e7)) +
+  theme_bw()
+```
+
+
+
+Correlation with and without covariates
+```{r}
+data.frame(
+  pval_no_cov = -log10(fpscore_regression$pval),
+  pval_with_cov = -log10(fpscore_cov_regression$pval)
+) %>%
+  ggplot(aes(x = pval_no_cov, y = pval_with_cov)) +
+  geom_point(size = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "blue") +
+  stat_cor(aes(label = paste(after_stat(rr.label), ..p.label.., sep = "~`,`~")),) +
+  xlab("-log10 p-value without covariates") +
+  ylab("-log10 p-value WITH covariates") +
+  theme_minimal()
+ggsave(paste0(FP_METHOD, "/figures/regression_pvals_with_vs_without_covariates.png"))
+
+cor.test(-log10(fpscore_regression$pval), -log10(fpscore_cov_regression$pval),
+         method = "spearman")
+cor.test(-log10(fpscore_regression$pval), -log10(fpscore_cov_regression$pval),
+         method = "pearson")
+```
+
+
+
+# Enrichment with caQTLs ----------------------------------------------------------------
+
+```{r}
+caQTL_tests <- read.csv("../../../PMACS/bulk_human_liver_footprints/functional_variants/caQTL/qtl_snps_fp_score_chip_slice_minq_cut.txt.gz" %>% gzfile(), sep="\t")
+```
+
+
+```{r}
+cat("Prepping caQTL data...\n")
+# Pick most significant peak for every variant
+fpscore_regression %>%
+  dplyr::rename(
+    rs_ID = variant_id
+  ) %>%
+  mutate(
+    FP_Log10_ST_Qvalue = log10(ST_qval),
+    fpQTL = ST_qval < 0.05
+  ) %>%
+  inner_join(caQTL_tests) %>%
+  dplyr::rename(
+    caQTL_Log_10_BH_Qvalue = Log_10_BH_Qvalue,
+    caQTL = qtl
+  ) %>%
+  group_by(rs_ID) %>%
+  slice_min(caQTL_Log_10_BH_Qvalue) %>%
+  ungroup() -> # Pick most significant peak for every variant
+  fpscore_regression_caqtl_joined
+```
+
+
+```{r}
+fpscore_regression_caqtl_joined %>%
+count(fpQTL, caQTL) %>%
+pull(n) %>%
+matrix(
+  nrow = 2,
+  dimnames = list(
+    c("non-caQTL", "caQTL"),
+    c("non-fpQTL", "fpQTL")
+  )
+) ->
+m
+
+m %>% addmargins()
+(t(apply(m  %>% addmargins() ,1, function(x) x/sum(x))) * 2 * 100) # Normalized by row sums
+fisher.test(m)
+```
+
+
+```{r}
+cat("Plotting enrichment with caQTLs...\n")
+fpscore_regression_caqtl_joined %>%
+  sample_frac(0.1) %>%
+  ggplot(aes(x = -FP_Log10_ST_Qvalue, y = -caQTL_Log_10_BH_Qvalue)) +
+  geom_point() +
+  xlab("fpQTL -log10(q)") +
+  ylab("caQTL -log10(q)") +
+  scale_x_log10() +
+  scale_y_log10(limits = c(-log10(0.05), NA)) +
+  stat_cor(aes(label = paste(..r.label.., ..rr.label.., ..p.label.., sep = "~`,`~")),
+           method = "spearman", r.digits = 2, cor.coef.name = "rho")
+# ggsave(paste0(FP_METHOD, "/figures/regression_results/fpQTL_caQTL_significance.png"))
+```
+
+
+```{r fig.height=4, fig.width=6}
+cat("Plotting relationship with caQTL effect size...\n")
+fpscore_regression_caqtl_joined %>%
+  # sample_frac(0.1) %>%
+  mutate(significance = interaction(fpQTL, caQTL, sep = ":")) %>%
+  arrange(significance) %>%
+  ggplot(aes(x = beta, y = Effect_Size)) +
+  geom_point(aes(color = significance, size = fpQTL | caQTL, alpha = fpQTL | caQTL)) +
+  xlab("fpQTL effect size") +
+  ylab("caQTL effect size") +
+  scale_color_manual(values = c("black", "#EB455F", "#537FE7", "purple"),
+                     labels = c("neither", "fpQTL", "caQTL", "both"), name = "Functional Significance") +
+  scale_size_manual(values = c(0.25, 0.5), guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  theme_minimal() +
+  theme(aspect.ratio=1)
+# ggsave(paste0(FP_METHOD, "/figures/regression_results/fpQTL_caQTL_effect_size.png")
+
+cat("Plotting relationship with caQTL effect size...\n")
+fpscore_regression_caqtl_joined %>%
+  sample_frac(0.1) %>%
+  mutate(significance = interaction(fpQTL, caQTL, sep = ":")) %>%
+  arrange(significance) %>%
+  ggplot(aes(x = abs(beta), y = pmax(Effect_Size, 1-Effect_Size))) +
+  geom_point(aes(color = significance, size = fpQTL | caQTL, alpha = fpQTL | caQTL)) +
+  xlab("fpQTL absolute effect size") +
+  ylab("caQTL absolute effect size") +
+  scale_color_manual(values = c("black", "#EB455F", "#537FE7", "purple"),
+                     labels = c("neither", "fpQTL", "caQTL", "both"), name = "Functional Significance") +
+  scale_size_manual(values = c(0.5, 1), guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  theme_minimal() +
+  theme(aspect.ratio=1) +
+  stat_cor(aes(label = paste(..r.label.., ..rr.label.., ..p.label.., sep = "~`,`~")),
+           method = "spearman", r.digits = 2, cor.coef.name = "rho")
+# ggsave(paste0(FP_METHOD, "/figures/regression_results/fpQTL_caQTL_absolute_effect_size.png"))
+```
+
+
+
+
+# Enrichment with eQTLs ----------------------------------------------------------------
+```{r}
+cat("Loading eQTL data...\n")
+eqtl_lead_snps <- read.csv("../../../PMACS/bulk_human_liver_footprints/functional_variants/eQTL/eQTL_significant_lead_snps_per_gene.txt.gz" %>% gzfile(), sep="\t")
+
+eqtl_lead_snps %>%
+  pull(variant_id) ->
+  lead_snp_ids
+
+eqtl_all_vars <- read.csv("../../../PMACS/bulk_human_liver_footprints/functional_variants/eQTL/GTEx_Analysis_v8_eQTL/GTEx_v8_Liver_best_eQTL_per_variant.txt.gz" %>% gzfile(), sep="\t")
+```
+
+
+```{r}
+cat("Prepping eQTL data...\n")
+eqtl_all_vars %>%
+  # group_by(variant_id) %>%
+  # slice_min(pval_nominal) %>%
+  # ungroup() %>%
+  mutate(
+    eQTL = variant_id %in% lead_snp_ids
+  ) ->
+  eqtl_all_vars
+```
+
+
+```{r}
+fpscore_regression %>%
+  dplyr::rename(
+    rs_ID = variant_id
+  ) %>%
+  mutate(
+    chr = as.character(variant_chrom),
+    FP_Log10_ST_Qvalue = log10(ST_qval),
+    fpQTL = ST_qval < 0.05
+  ) %>%
+  inner_join(eqtl_all_vars) %>%
+  dplyr::rename(
+    eQTL_pval_nominal = pval_nominal,
+    eQTL_slope = slope
+  ) %>%
+  group_by(variant_id) %>%
+  slice_min(eQTL_pval_nominal) %>%
+  ungroup() -> # Pick most significant peak for every variant
+  fpscore_regression_eqtl_joined
+```
+
+```{r}
+fpscore_regression_eqtl_joined %>%
+count(fpQTL, eQTL) %>%
+pull(n) %>%
+matrix(
+  nrow = 2,
+  dimnames = list(
+    c("non-eQTL", "eQTL"),
+    c("non-fpQTL", "fpQTL")
+  )
+) ->
+m
+
+m %>% addmargins()
+(t(apply(m  %>% addmargins() ,1, function(x) x/sum(x))) * 2 * 100) # Normalized by row sums
+fisher.test(m)
+```
+
+
+
+```{r fig.width=6, fig.height=4}
+cat("Plotting relationship with eQTL effect size...\n")
+fpscore_regression_eqtl_joined %>%
+  # sample_frac(0.1) %>%
+  mutate(significance = interaction(fpQTL, eQTL, sep = ":")) %>%
+  arrange(significance) %>%
+  ggplot(aes(x = beta, y = eQTL_slope)) +
+  geom_point(aes(color = significance, size = fpQTL | eQTL, alpha = fpQTL | eQTL)) +
+  xlab("fpQTL effect size") +
+  ylab("eQTL effect size") +
+  scale_color_manual(values = c("black", "#EB455F", "#537FE7", "purple"),
+                     labels = c("neither", "fpQTL", "eQTL", "both"), name = "Functional Significance") +
+  scale_size_manual(values = c(0.25, 0.5), guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  theme_minimal() +
+  theme(aspect.ratio=1)
+# ggsave(paste0(FP_METHOD, "/figures/regression_results/fpQTL_eQTL_effect_size.png"))
+```
+
+
+```{r}
+cat("Plotting relationship with absolute eQTL effect size...\n")
+fpscore_regression_eqtl_joined %>%
+  sample_frac(0.1) %>%
+  mutate(significance = interaction(fpQTL, eQTL, sep = ":")) %>%
+  arrange(significance) %>%
+  ggplot(aes(x = abs(beta), y = abs(eQTL_slope))) +
+  geom_point(aes(color = significance, size = fpQTL | eQTL, alpha = fpQTL | eQTL)) +
+  xlab("fpQTL absolute effect size") +
+  ylab("eQTL absolute effect size") +
+  scale_color_manual(values = c("black", "#EB455F", "#537FE7", "purple"),
+                     labels = c("neither", "fpQTL", "eQTL", "both"), name = "Functional Significance") +
+  scale_size_manual(values = c(0.5, 1), guide = "none") +
+  scale_alpha_manual(values = c(0.5, 1), guide = "none") +
+  theme(aspect.ratio=1) +
+  stat_cor(aes(label = paste(..r.label.., ..rr.label.., ..p.label.., sep = "~`,`~")),
+           method = "spearman", r.digits = 2, cor.coef.name = "rho")
+ggsave(paste0(FP_METHOD, "/figures/regression_results/fpQTL_eQTL_absolute_effect_size.png"))
+```
+
+
+
+
+ 

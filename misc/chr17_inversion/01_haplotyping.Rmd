@@ -1,0 +1,210 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(scoreInvHap)
+library(VariantAnnotation)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+
+# Subset VCF
+```{r}
+file.gz <- paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/vcf/gencove_175_Samples_10.1.21_polymorphisms_only.SNPs_only.MAF_HWE_filtered_GP_0.8.AlleleSpecific.final.vcf.sorted.gz.recode.vcf.gz")
+file.gz.tbi <- paste(file.gz, ".tbi", sep="")
+
+start.loc <- 4.5e7
+end.loc   <- 4.7e7
+chr17.gr <- GRanges("17", IRanges(start.loc, end.loc))
+params <- ScanVcfParam(which=chr17.gr)
+vcf <- readVcf(TabixFile(file.gz), "hg38", params)
+
+outfile <- "data/chr17-sub.vcf"
+writeVcf(vcf, outfile)
+bgzip(outfile, overwrite=TRUE)
+indexTabix(paste0(outfile, ".bgz"), format="vcf")
+```
+
+```{r}
+sample_key <- read.table(paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/vcf/finalKey.txt"))
+
+sample_key <- sample_key %>%
+  dplyr::rename(vcf1 = V1,
+                vcf2 = V2,
+                sample_name = V3) %>%
+  mutate(vcf1 = gsub("M", "", vcf1))
+
+get_sample_id <- function(vcf_sample_id) {
+  vcf_sample_id <- gsub("M", "", vcf_sample_id)
+  if (suppressWarnings(!is.na(as.numeric(vcf_sample_id)))) {
+    vcf_sample_id <- str_remove(vcf_sample_id, "^0+")
+  }
+
+  idx1 <- which(sample_key$vcf1 == vcf_sample_id)
+  idx2 <- which(sample_key$vcf2 == vcf_sample_id)
+  idx <- na.omit(c(idx1, idx2))
+  sample_id <- sample_key$sample_name[idx]
+  return(sample_id[1])
+}
+```
+
+
+```{r}
+vcf <- readVcf("data/chr17-sub.vcf.bgz", "hg38")
+vcf
+
+res <- scoreInvHap(SNPlist = vcf, inv = "inv17_007")
+res
+
+res %>% saveRDS("data/scoreInvHap_result.Rds")
+
+```
+
+```{r}
+res <- readRDS("data/scoreInvHap_result.Rds")
+```
+
+# QC
+
+```{r}
+plotScores(res, pch = 16, main = "QC based on scores")
+plotCallRate(res, main = "Call Rate QC")
+```
+
+```{r}
+inversion_genotypes <- 
+  data.frame(genotype = classification(res)) %>%
+  rownames_to_column("sample_id") %>%
+  rowwise() %>%
+  mutate(sample_name = get_sample_id(sample_id)) %>%
+  ungroup() %>%
+  dplyr::select(sample_name, genotype) %>%
+  arrange(sample_name)
+
+inversion_genotypes %>% arrange(fct_rev(genotype))
+inversion_genotypes %>%
+  write.table("data/chr17_inversion_genotypes.txt",
+              quote = FALSE, row.names = FALSE, sep = "\t")
+
+```
+
+
+# Other inversions - 8p23.1 
+
+```{r}
+# chr8:6,300,001-12,800,000
+# Subset VCF
+file.gz <- paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/vcf/gencove_175_Samples_10.1.21_polymorphisms_only.SNPs_only.MAF_HWE_filtered_GP_0.8.AlleleSpecific.final.vcf.sorted.gz.recode.vcf.gz")
+file.gz.tbi <- paste(file.gz, ".tbi", sep="")
+
+start.loc <- 6300001
+end.loc   <- 12800000
+chr8.gr <- GRanges("8", IRanges(start.loc, end.loc))
+params <- ScanVcfParam(which=chr8.gr)
+vcf <- readVcf(TabixFile(file.gz), "hg38", params)
+
+outfile <- "data/chr8p23.1-sub.vcf"
+writeVcf(vcf, outfile)
+bgzip(outfile, overwrite=TRUE)
+indexTabix(paste0(outfile, ".bgz"), format="vcf")
+```
+
+```{r}
+vcf <- readVcf("data/chr8p23.1-sub.vcf.bgz", "hg38")
+# vcf
+
+res_chr8 <- scoreInvHap(SNPlist = vcf, inv = "inv8_001")
+# res_chr8
+
+res_chr8 %>% saveRDS("data/scoreInvHap_8p23.1_result.Rds")
+```
+
+```{r}
+res_chr8 <- readRDS("data/scoreInvHap_8p23.1_result.Rds")
+```
+
+# QC
+
+```{r}
+plotScores(res_chr8, pch = 16, main = "QC based on scores")
+plotCallRate(res_chr8, main = "Call Rate QC")
+```
+
+```{r}
+inversion_genotypes_chr8 <- 
+  data.frame(genotype = classification(res_chr8)) %>%
+  rownames_to_column("sample_id") %>%
+  rowwise() %>%
+  mutate(sample_name = get_sample_id(sample_id)) %>%
+  ungroup() %>%
+  dplyr::select(sample_name, genotype) %>%
+  arrange(sample_name)
+
+inversion_genotypes_chr8 %>% arrange(fct_rev(genotype))
+inversion_genotypes_chr8 %>%
+  write.table("data/chr8_inversion_genotypes.txt",
+              quote = FALSE, row.names = FALSE, sep = "\t")
+
+```
+
+
+# Chr16
+
+```{r}
+# chr16:28,500,001-35,300,000
+# Subset VCF
+file.gz <- paste0(ROOT_DIR, "raw_data/brandon_liver_ATAC/vcf/gencove_175_Samples_10.1.21_polymorphisms_only.SNPs_only.MAF_HWE_filtered_GP_0.8.AlleleSpecific.final.vcf.sorted.gz.recode.vcf.gz")
+file.gz.tbi <- paste(file.gz, ".tbi", sep="")
+
+start.loc <- 28500001-4e5
+end.loc   <- 35300000+4e5
+chr16.gr <- GRanges("16", IRanges(start.loc, end.loc))
+params <- ScanVcfParam(which=chr16.gr)
+vcf <- readVcf(TabixFile(file.gz), "hg38", params)
+
+outfile <- "data/chr16p11.2-sub.vcf"
+writeVcf(vcf, outfile)
+bgzip(outfile, overwrite=TRUE)
+indexTabix(paste0(outfile, ".bgz"), format="vcf")
+```
+
+```{r}
+vcf <- readVcf("data/chr16p11.2-sub.vcf.bgz", "hg38")
+# vcf
+
+res_chr16 <- scoreInvHap(SNPlist = vcf, inv = "inv16_009")
+# res_chr16
+
+res_chr16 %>% saveRDS("data/scoreInvHap_16p11.2_result.Rds")
+```
+
+```{r}
+res_chr16 <- readRDS("data/scoreInvHap_16p11.2_result.Rds")
+```
+
+# QC
+
+```{r}
+plotScores(res_chr16, pch = 16, main = "QC based on scores")
+plotCallRate(res_chr16, main = "Call Rate QC")
+```
+
+```{r}
+inversion_genotypes_chr16 <- 
+  data.frame(genotype = classification(res_chr16)) %>%
+  rownames_to_column("sample_id") %>%
+  rowwise() %>%
+  mutate(sample_name = get_sample_id(sample_id)) %>%
+  ungroup() %>%
+  dplyr::select(sample_name, genotype) %>%
+  arrange(sample_name)
+
+inversion_genotypes_chr16 %>% arrange(fct_rev(genotype))
+inversion_genotypes_chr16 %>%
+  write.table("data/chr16_inversion_genotypes.txt",
+              quote = FALSE, row.names = FALSE, sep = "\t")
+
+```
+
+
+
+
+

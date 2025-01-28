@@ -1,0 +1,80 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_no_gaussian"
+DIR <- paste0("FP_methods/", FP_METHOD, "/")
+```
+
+```{r}
+residual_matrix <- readRDS(paste0(DIR, "regression_results/residuals_with_covariates.Rds"))
+```
+
+```{r}
+residual_matrix[1:10, 1:10]
+```
+
+
+```{r}
+fpQTLs <- read.delim(paste0(DIR, "regression_results/fpQTLs_covariates_FDR5.txt"))
+```
+
+```{r}
+fpQTL_residuals <- residual_matrix[sample(fpQTLs$variant_id, 100),] %>%
+  as.data.frame() %>%
+  rownames_to_column("variant_id") %>%
+  pivot_longer(-variant_id, names_to = "sample", values_to = "residual")
+
+random_residuals <- residual_matrix[sample(1:nrow(residual_matrix), 100),] %>%
+  as.data.frame() %>%
+  rownames_to_column("variant_id") %>%
+  pivot_longer(-variant_id, names_to = "sample", values_to = "residual")
+```
+
+```{r}
+shapiro_pvals <- apply(residual_matrix, 1, function(x) {shapiro.test(x)$p.value})
+```
+
+```{r}
+normality_test <- data.frame(
+    variant_id = names(shapiro_pvals),
+    p = shapiro_pvals
+  ) %>%
+  mutate(
+    fpQTL = variant_id %in% fpQTLs$variant_id,
+    adj_p = p.adjust(p, method = "bonferroni"),
+    significant = adj_p < 0.05
+  )
+
+normality_test %>% saveRDS(paste0(DIR, "regression_results/normality_test.Rds"))
+```
+
+```{r}
+normality_test <- readRDS(paste0(DIR, "regression_results/normality_test.Rds"))
+```
+
+```{r}
+normality_test %>%
+  count(significant, fpQTL)
+```
+
+
+
+
+```{r fig.width=10, fig.height=10}
+fpQTL_residuals %>%
+  ggplot(aes(x = residual)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~variant_id, ncol = 10) +
+  theme_bw()
+
+random_residuals %>%
+  ggplot(aes(x = residual)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~variant_id, ncol = 10) +
+  theme_bw()
+```
+
+

@@ -1,0 +1,343 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(gridExtra)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_logit"
+fpQTLs <- read.delim(paste0("fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+```
+
+```{r}
+regression_results <- readRDS(paste0("../regression/FP_methods/", FP_METHOD, "/regression_results/fp_score_covariates_genotype_regression.Rds"))
+```
+
+
+# Load significant GWAS summary stats
+```{r}
+GWAS_DIR <- paste0(ROOT_DIR,
+                   "raw_data/GWAS/summary_stats_hg38_liftover/munged_for_coloc/sig_only")
+filenames <- list.files(GWAS_DIR, "*.sumstats", full.names = TRUE)
+traits <- str_match(filenames, ".*/(.*?)\\.sumstats")[,2]
+
+sumstats_sig <- filenames %>% lapply(read.delim)
+names(sumstats_sig) <- traits
+```
+
+```{r}
+sumstats_sig[["lipids_HDL_sig"]]
+```
+
+
+```{r}
+GWAS_DIR <- paste0(ROOT_DIR,
+                   "raw_data/GWAS/summary_stats_hg38_liftover/munged_for_coloc")
+BMI <- read.delim(paste0(GWAS_DIR, "/BMI.sumstats"))
+lipids_LDL <- read.delim(paste0(GWAS_DIR, "/lipids_LDL.sumstats"))
+```
+
+
+# Load eQTL
+```{r}
+liver_sig_pairs <- 
+  paste0(ROOT_DIR, "raw_data/GTEx/Liver.v8.signif_variant_gene_pairs.hg38.names.Rds") %>%
+  readRDS()
+```
+
+
+```{r}
+# GWAS + concordant motif
+fpQTLs %>%
+  filter(!is.na(associated_traits)) %>%
+  filter(!is.na(concordant_motif_ids))
+```
+
+```{r}
+# GWAS + allelic ChIP-seq
+fpQTLs %>%
+  filter(!is.na(associated_traits)) %>%
+  filter(!is.na(ADASTRA_TFs))
+```
+
+# Plot SORT1 lipid-associated locus rs12740374
+```{r fig.width=6, fig.height=7}
+chrom <- "chr1"
+pos <- 109274968
+W <- 8e4
+
+par(mfrow = c(2, 1))
+
+fpQTL_plot <- regression_results %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab("") +
+  ylab("fpQTL -log10(p)") +
+  theme_bw()
+
+GWAS_plot <- sumstats_sig[["lipids_TC_sig"]] %>%
+  filter(CHR == chrom) %>%
+  filter(POS > pos-W, POS < pos+W) %>%
+  ggplot(aes(x = POS, y = -log10(P))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  ylim(c(0, NA)) +
+  xlab("") +
+  ylab("TC -log10(p)") +
+  theme_bw()
+
+liver_sig_pairs %>%
+  filter(variant_chrom == chrom, variant_pos == pos)
+
+eQTL_plot <- liver_sig_pairs %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  filter(gene_name %in% c("SORT1", "CELSR2", "PSRC1", "SYPL2", "ATXN7L2")) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval_nominal))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point(aes(color = gene_name)) +
+  xlim(c(pos-W, pos+W)) +
+  xlab(chrom) +
+  ylab("eQTL -log10(p)") +
+  theme_bw() +
+  theme(legend.position = "bottom") +
+  scale_color_discrete(name = "eQTL Gene")
+
+grid.arrange(fpQTL_plot, GWAS_plot, eQTL_plot, ncol = 1)
+```
+
+# Plot ZFPM1 lipid-associated locus rs55823018
+```{r fig.width=6, fig.height=7}
+chrom <- "chr16"
+pos <- 88468834
+W <- 8e4
+
+par(mfrow = c(2, 1))
+
+fpQTL_plot <- regression_results %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab("") +
+  ylab("fpQTL -log10(p)") +
+  theme_bw()
+
+GWAS_plot <- sumstats_sig[["lipids_TC_sig"]] %>%
+  filter(CHR == chrom) %>%
+  filter(POS > pos-W, POS < pos+W) %>%
+  ggplot(aes(x = POS, y = -log10(P))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  ylim(c(0, NA)) +
+  xlab("") +
+  ylab("TC -log10(p)") +
+  theme_bw()
+
+eQTL_plot <- liver_sig_pairs %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  filter(gene_name %in% c("ZFPM1")) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval_nominal))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab(chrom) +
+  ylab("ZFPM1 eQTL -log10(p)") +
+  theme_bw()
+
+grid.arrange(fpQTL_plot, GWAS_plot, eQTL_plot, ncol = 1)
+```
+
+# Plot SLC12A8 lipid associated locus - rs11710930
+```{r fig.width=6, fig.height=7}
+chrom <- "chr3"
+pos <- 125207609
+W <- 1e4
+
+par(mfrow = c(2, 1))
+
+fpQTL_plot <- regression_results %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab("") +
+  ylab("fpQTL -log10(p)") +
+  theme_bw()
+
+GWAS_plot <- lipids_LDL %>%
+  filter(CHR == chrom) %>%
+  filter(POS > pos-W, POS < pos+W) %>%
+  ggplot(aes(x = POS, y = -log10(P))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  ylim(c(0, NA)) +
+  xlab("") +
+  ylab("LDL -log10(p)") +
+  theme_bw()
+
+eQTL_plot <- liver_sig_pairs %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  filter(gene_name %in% c("SLC12A8")) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval_nominal))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab(chrom) +
+  ylab("SLC12A8 eQTL -log10(p)") +
+  theme_bw()
+
+grid.arrange(fpQTL_plot, GWAS_plot, eQTL_plot, ncol = 1)
+```
+
+# Plot BMI-associated fpQTL
+```{r fig.width=6, fig.height=7}
+chrom <- "chr16"
+pos <- 31159853
+W <- 1e6
+
+par(mfrow = c(2, 1))
+
+fpQTL_plot <- regression_results %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  ggplot(aes(x = variant_pos, y = -log10(pval))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab("") +
+  ylab("fpQTL -log10(p)") +
+  theme_bw()
+
+BMI_plot <- BMI %>%
+  filter(CHR == 16) %>%
+  filter(POS > pos-W, POS < pos+W) %>%
+  ggplot(aes(x = POS, y = -log10(P))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  ylim(c(0, NA)) +
+  xlab("") +
+  ylab("BMI -log10(p)") +
+  theme_bw()
+
+eQTL_plot <- liver_sig_pairs %>%
+  filter(variant_chrom == chrom) %>%
+  filter(variant_pos > pos-W, variant_pos < pos+W) %>%
+  filter(gene_name == "VKORC1") %>% # VKORC1
+  # filter(grepl("ENSG00000151006", gene_id, fixed = TRUE)) %>% # PRSS53 
+  ggplot(aes(x = variant_pos, y = -log10(pval_nominal))) +
+  geom_vline(xintercept = pos, color = "red") +
+  geom_point() +
+  xlim(c(pos-W, pos+W)) +
+  xlab(chrom) +
+  ylab("VKORC1 eQTL -log10(p)") +
+  theme_bw()
+
+grid.arrange(fpQTL_plot, BMI_plot, eQTL_plot, ncol = 1)
+```
+
+
+# Get ChIP-seq and sequences for loci
+```{r}
+library(stringi)
+seqs <- readRDS("../motif_analysis/variant_seqs.Rds")
+chip_peaks <- read.delim(paste0(ROOT_DIR, "raw_data/ChIP-seq/tf_clusters_liver_ENCODE/new_hg38/hg38_tf_clusters_liver_labelled.txt"))
+```
+
+# Locus 1 - ZFPM1 lipid-associated locus rs55823018
+```{r}
+chrom <- "chr16"
+pos <- 88468834
+TFs <-c("RXRA")
+m <- 15 # motif length
+rsID <- "rs55823018"
+
+W <- 1e5
+chip_peaks %>% 
+  filter(chrom == chrom, name %in% TFs, chromStart < pos, chromEnd > pos)
+chip_peaks %>% 
+  filter(chrom == chrom, name %in% TFs, chromStart < pos+W, chromEnd > pos-W)
+
+x <- seqs[seqs$variant_id == rsID,]
+w <- str_length(x$alt_seq) %/% 2 # string width
+ref_seq <- x$ref_seq %>% str_sub(w-m, w+m)
+alt_seq <- x$alt_seq %>% str_sub(w-m, w+m)
+ref_seq
+alt_seq
+
+```
+
+
+# Locus 2 - SLC12A8 lipid associated locus - rs11710930
+```{r}
+chrom <- "chr3"
+pos <- 125207609
+TFs <- c("HNF4A")
+rsID <- "rs11710930"
+
+W <- 1e5
+chip_peaks %>% 
+  filter(chrom == chrom, name %in% TFs, chromStart < pos, chromEnd > pos)
+chip_peaks %>% 
+  filter(chrom == chrom, name %in% TFs, chromStart < pos+W, chromEnd > pos-W)
+
+x <- seqs[seqs$variant_id == rsID,]
+w <- str_length(x$alt_seq) %/% 2 # string width
+ref_seq <- x$ref_seq %>% str_sub(w-m, w+m)
+alt_seq <- x$alt_seq %>% str_sub(w-m, w+m)
+
+rc <- function(nucSeq)
+  return(stri_reverse(chartr("acgtACGT", "tgcaTGCA", nucSeq)))
+ref_seq
+alt_seq
+print("")
+rc(ref_seq)
+rc(alt_seq)
+
+
+```
+# MANUSCRIPT - Supplementary table 1
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+fpQTLs <- read.delim(paste0("fpQTLs_annotated/", FP_METHOD, "_annotated_fpQTLs.txt"))
+
+colnames(fpQTLs)
+```
+
+```{r}
+fpQTLs %>%
+  dplyr::select(
+    variant_id, variant_chrom, variant_pos, beta, r_squared, pval,
+    ref_allele, alt_allele, genotype0_counts, genotype1_counts, genotype2_counts, maf,
+    ST_qval, nearest_tss, signed_tss_distance, associated_traits, liver_eQTL_gene_names, liver_TF_ChIP,
+    concordant_motif_ids, ADASTRA_TFs
+  ) %>%
+  dplyr::rename(
+    SNP = variant_id, `Effect Size` = beta, `R2` = r_squared, P = pval,
+    CHROM = variant_chrom, POS_hg38 = variant_pos, REF = ref_allele, ALT = alt_allele, MAF = maf,
+    `N Genotype 0` = genotype0_counts, `N Genotype 1` = genotype1_counts, `N Genotype 2` = genotype2_counts,
+    Q = ST_qval, `Nearest TSS` = nearest_tss, `TSS Distance` = signed_tss_distance,
+    `GWAS Traits` = associated_traits, `Liver eGenes` = liver_eQTL_gene_names, `Liver ChIP-seq TFs` = liver_TF_ChIP,
+    `Concordant Motifs` = concordant_motif_ids, `ADASTRA TFs` = ADASTRA_TFs
+  ) %>%
+  mutate(across(everything(), ~ replace(.x, is.na(.x), ""))) %>%
+  write.table(paste0("fpQTLs_annotated/%s_fpQTL_supplementary_table.txt" %>% sprintf(FP_METHOD)),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+
+
+

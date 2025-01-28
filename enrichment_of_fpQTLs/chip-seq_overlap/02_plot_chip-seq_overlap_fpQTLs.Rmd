@@ -1,0 +1,153 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(qvalue)
+library(ggrepel)
+library(viridis)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+dir.create("figures/%s" %>% sprintf(FP_METHOD), showWarnings = FALSE)
+```
+
+
+```{r}
+chip_tables2x2 <- read.delim("overlap_tables/%s_fpQTL_chip-seq_overlap.txt" %>% sprintf(FP_METHOD))
+
+chip_tables2x2 %>%
+  group_by(fp_method, covariates) %>%
+  mutate(
+    ST_qval = qvalue(fishers_p, lambda = 0)$qvalues,
+    significant = ST_qval < 0.05
+  ) %>%
+  ungroup() ->
+  chip_tables2x2
+
+chip_tables2x2 <- chip_tables2x2 %>%
+  mutate(
+    total_snps = snps_neither + snps_fpQTL_only + snps_chip_only + snps_chip_and_fpQTL,
+    snps_fpQTLs = snps_fpQTL_only + snps_chip_and_fpQTL,
+    snps_chip = snps_chip_only + snps_chip_and_fpQTL,
+    expected_snps_chip_and_fpQTL = snps_chip * snps_fpQTLs/total_snps)
+
+chip_tables2x2 %>%
+  filter(covariates == TRUE)
+```
+
+```{r}
+liver_TFs <- c("SOX6", "FOXA1", "FOXA2", "JUND", "HNF4A", "HNF4G")
+
+chip_tables2x2 %>%
+  filter(covariates == TRUE) %>%
+  filter(TF_name %in% liver_TFs)
+```
+
+# MANUSCRIPT - Figure 3A
+```{r fig.width=3, fig.height=3.75}
+liver_TFs <- c("SOX6", "FOXA1", "FOXA2", "JUND", "HNF4A", "HNF4G")
+df <- chip_tables2x2 %>%
+  filter(covariates == TRUE) %>%
+  mutate(liver_TF = TF_name %in% liver_TFs,
+         label = ifelse(liver_TF, TF_name, "")) %>%
+  arrange(liver_TF)
+
+df %>%
+  ggplot(aes(x = expected_snps_chip_and_fpQTL, y = snps_chip_and_fpQTL, 
+             color = liver_TF, shape = liver_TF)) +
+  geom_point(size = 2.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +
+  geom_label_repel(
+    # data = df %>% filter(liver_TF),
+    aes(label = label),
+    force = 50,
+    min.segment.length = 0,
+    max.overlaps = 100,
+    seed = 26743,
+    segment.color = 'grey50') +
+  scale_color_manual(values = c("black", "red"), guide = "none") +
+  scale_shape_manual(values = c(16,17), guide = "none") +
+  xlab("Expected number of fpQTLs") +
+  ylab("Observed number of fpQTLs") +
+  theme_classic() 
+ggsave("figures/%s/%s_chip_observed_vs_expected.png" %>% sprintf(FP_METHOD, FP_METHOD), 
+       width = 3, height = 3.75, units = "in", dpi = 300)
+```
+
+
+
+```{r fig.height=9, fig.width=5}
+plot_chip_enrichment <- function(covariates_filter = TRUE) {
+  chip_tables2x2 %>%
+    filter(covariates == covariates_filter) %>%
+    arrange(odds_ratio) %>%
+    pull(TF_name) ->
+    TF_order
+  
+  chip_tables2x2 %>%
+    filter(fp_method == FP_METHOD & covariates == covariates_filter) %>%
+    # filter(snps_chip_and_fpQTL > 0) %>%
+    filter(odds_ratio > 1 & fishers_p < 0.05) %>%
+    mutate(TF_name = factor(TF_name, levels = TF_order)) %>%
+    ggplot(aes(x = odds_ratio, y = TF_name, color = -log10(fishers_p))) + 
+    geom_vline(xintercept = 1) +
+    geom_pointrange(aes(xmin = odds_ratio_95_low, 
+                        xmax = odds_ratio_95_high), size = 0.75) +
+    geom_point(data = . %>% filter(significant, -log10(fishers_p) < 15),  shape = "*", color = "black", size = 4) +
+    geom_point(data = . %>% filter(significant, -log10(fishers_p) >= 15), shape = "*", color = "white", size = 4) +
+    scale_color_viridis(option = "plasma", name = bquote(-log[10](p)), direction = -1) +
+    scale_x_log10(breaks = c(1, 3, 10, 30)) +
+    xlab("Odds ratio") +
+    ylab("ChIP-seq TF") +
+    # ggtitle(paste0("Enrichment of ChIP-seq peaks, ", FP_METHOD)) +
+    theme_bw()
+}
+
+plot_chip_enrichment()
+ggsave("figures/%s/%s_chip_tf_enrichment_poster.png" %>% sprintf(FP_METHOD, FP_METHOD),
+         height = 9, width = 5, units = "in", dpi = 600)
+```
+
+```{r}
+chip_tables2x2 %>%
+    filter(covariates == TRUE) %>%
+    filter(odds_ratio > 1) %>%
+    ggplot(aes(x = snps_chip_and_fpQTL))+
+    geom_histogram(bins = 100)
+
+chip_tables2x2 %>%
+    filter(covariates == TRUE) %>%
+    filter(odds_ratio > 1) %>%
+    count(snps_chip_and_fpQTL)
+    
+```
+# How many TFs are (significantly) enriched?
+```{r}
+chip_tables2x2 %>%
+  filter(covariates == TRUE) %>%
+  count(significant)
+
+chip_tables2x2 %>%
+  filter(covariates == TRUE) %>%
+  count(odds_ratio > 1)
+  
+```
+
+
+# MANUSCRIPT - supplementary table 2
+```{r}
+chip_tables2x2 %>%
+  filter(covariates == TRUE) %>%
+  mutate(`Overlapping SNPs` = snps_chip_only + snps_chip_and_fpQTL) %>%
+  dplyr::select(TF_name, `Overlapping SNPs`, snps_chip_and_fpQTL, 
+         odds_ratio, odds_ratio_95_low, odds_ratio_95_high,
+         fishers_p, ST_qval) %>%
+  dplyr::rename(
+    TF = TF_name, `Overlapping fpQTLs` = snps_chip_and_fpQTL, 
+    `Odds Ratio` = odds_ratio, `Odds Ratio 95CI Low` = odds_ratio_95_low, `Odds Ratio 95CI High` = odds_ratio_95_high, 
+    `P (Fisher's Exact Test)` = fishers_p, Q = ST_qval
+  ) %>%
+  write.table("%s_chip_seq_supplementary_table.txt" %>% sprintf(FP_METHOD),
+              quote = FALSE, row.names = FALSE, sep = "\t")
+```
+

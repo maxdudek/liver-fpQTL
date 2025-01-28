@@ -1,0 +1,36 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+genotype_colors <- c("#d33682", "#6c71c4", "#2aa198")
+```
+
+# Background insertion distribution
+```{r fig.width=12, fig.height=3}
+n <- 100
+
+data.frame(
+  x = 1:n - n/2,
+  insertions = rpois(n, lambda = 5)
+) %>%
+  ggplot(aes(x = x, y = insertions)) +
+  geom_bar(stat = "identity", fill = genotype_colors[1]) +
+  theme_classic()
+```
+
+```{r fig.width=12, fig.height=3}
+n <- 100
+
+insertions <- rpois(n, lambda = 5)
+
+data.frame(
+  x = 1:n - n/2,
+  insertions = insertions
+) %>%
+  ggplot(aes(x = x, y = insertions)) +
+  geom_bar(stat = "identity", fill = genotype_colors[1]) +
+  theme_classic()
+```
+

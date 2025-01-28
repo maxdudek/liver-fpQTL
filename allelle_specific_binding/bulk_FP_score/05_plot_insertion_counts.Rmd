@@ -1,0 +1,148 @@
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+ROOT_DIR <- "/mnt/isilon/sfgi/dudekm/"
+```
+
+```{r}
+FP_METHOD <- "PRINT_beta_cloglog"
+
+allelic_fragments <- read.delim("../allelic_fragments/%s_allelic_fragments.txt" %>% sprintf(FP_METHOD))
+fpQTLs <- read.delim("../../regression/FP_methods/%s/regression_results/fpQTLs_covariates_FDR5.txt" %>% sprintf(FP_METHOD))
+
+allelic_fragments <- allelic_fragments %>%
+  mutate(insertion_3prime = insertion_3prime-1) %>% # Correct +4/-5 shift to +4/-4
+  pivot_longer(starts_with("insertion"), names_to = "end", values_to = "pos") %>%
+  select(-end) %>%
+  left_join(fpQTLs %>% select(variant_id, variant_pos), by = join_by(rsID == variant_id)) %>%
+  mutate(relative_pos = pos - variant_pos)
+```
+
+```{r}
+allelic_insertion_counts <- allelic_fragments %>%
+  filter(relative_pos > -100, relative_pos < 101) %>%
+  group_by(rsID, allele) %>%
+  summarize(num_insertions = sum(count)) %>%
+  pivot_wider(names_from = "allele", values_from = "num_insertions", names_prefix = "num_insertions_")
+```
+
+# Add total insertion counts
+```{r}
+local_insertions_matrix <- readRDS("../../PRINT/consolidated_results/PRINT_local_insertion_matrix.Rds")
+
+local_insertions_matrix_fpQTLs <- local_insertions_matrix[allelic_insertion_counts$rsID,]
+```
+
+
+```{r}
+allelic_insertion_counts <- local_insertions_matrix_fpQTLs %>%
+  rowSums() %>%
+  as.data.frame() %>%
+  rownames_to_column("rsID") %>%
+  dplyr::rename(., num_insertions_total = .) %>%
+  inner_join(allelic_insertion_counts, by = join_by(rsID)) %>%
+  mutate(
+    num_insertions_ref = ifelse(is.na(num_insertions_ref), 0, num_insertions_ref),
+    num_insertions_alt = ifelse(is.na(num_insertions_alt), 0, num_insertions_alt),
+    num_insertions_high = pmax(num_insertions_ref, num_insertions_alt),
+    num_insertions_low = pmin(num_insertions_ref, num_insertions_alt)
+  )
+```
+
+# Add het insertion counts
+```{r}
+genotype_matrix <- readRDS("../../regression/FP_methods/%s/data/genotype_matrix_fpQTLs_with_covariates.Rds" %>% sprintf(FP_METHOD))
+
+genotype_matrix_fpQTLs <- genotype_matrix[allelic_insertion_counts$rsID,]
+
+local_insertions_matrix_fpQTLs_hets <- local_insertions_matrix_fpQTLs
+local_insertions_matrix_fpQTLs_hets[genotype_matrix_fpQTLs!=1] <- 0 # Mask non-het insertions
+
+allelic_insertion_counts <- local_insertions_matrix_fpQTLs_hets %>%
+  rowSums() %>%
+  as.data.frame() %>%
+  rownames_to_column("rsID") %>%
+  dplyr::rename(., num_insertions_het = .) %>%
+  inner_join(allelic_insertion_counts, by = join_by(rsID)) %>%
+  mutate(
+    num_insertions_het_unmapped = num_insertions_het - (num_insertions_alt + num_insertions_ref),
+    num_insertions_homo = num_insertions_total - num_insertions_het
+  )
+```
+
+
+# Plot
+```{r fig.width=9, fig.height=3}
+colors <- c("high" = "#387E22", "low" = "#F2A93C", "het_unmapped" = "#7F7F7F", "homo" = "#93befa")
+
+plot_insertion_counts <- function(sort_col, file_ext) {
+  variant_order <- allelic_insertion_counts %>%
+    arrange(desc(!!as.name(sort_col))) %>%
+    pull(rsID) %>%
+    unique()
+  
+  allelic_insertion_counts %>%
+    select(rsID, num_insertions_high, num_insertions_low, num_insertions_het_unmapped, num_insertions_homo) %>%
+    pivot_longer(-rsID, names_to = "allele_mapping", values_to = "num_insertions", 
+                 names_prefix = "num_insertions_") %>%
+    mutate(
+      rsID = factor(rsID, levels = variant_order),
+      allele_mapping = factor(allele_mapping, levels = c("homo", "het_unmapped", "high", "low"))
+    ) %>%
+    ggplot(aes(x = rsID, y = num_insertions, fill = allele_mapping)) +
+    geom_bar(stat = "identity", width = 1) +
+    scale_fill_manual(values = colors, name = "", breaks = c("low", "high", "het_unmapped", "homo"),
+                      labels = c("homo" = "Homozygous",
+                                 "het_unmapped" = "Heterozygous \n(Unmapped)", 
+                                 "high" = "Heterozygous \n(Allele2)", 
+                                 "low" = "Heterozygous \n(Allele1)")) +
+    scale_y_continuous(expand = c(0,0)) +
+    coord_cartesian(ylim = c(0,10000)) +
+    xlab("fpQTLs") +
+    ylab("Insertions (all samples)") +
+    theme_classic() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+          legend.key.spacing.y = unit(0.5, "cm")) 
+  
+  ggsave("figures/%s/%s_insertion_counts_%s.png" %>% sprintf(FP_METHOD, FP_METHOD, file_ext),
+         width = 9, height = 3, units = "in", dpi = 600)
+}
+
+plot_insertion_counts("num_insertions_low", "lowsort")
+plot_insertion_counts("num_insertions_het", "hetsort")
+plot_insertion_counts("num_insertions_total", "totalsort")
+
+```
+# Testing
+```{r fig.width=20, fig.height=5}
+set.seed(0)
+df <- allelic_insertion_counts %>%
+  sample_n(100)
+
+variant_order <- df %>%
+  arrange(desc(num_insertions_het)) %>%
+  pull(rsID) %>%
+  unique()
+
+df %>%
+  select(rsID, num_insertions_high, num_insertions_low, num_insertions_het_unmapped, num_insertions_homo) %>%
+  pivot_longer(-rsID, names_to = "allele_mapping", values_to = "num_insertions", 
+               names_prefix = "num_insertions_") %>%
+  mutate(
+    rsID = factor(rsID, levels = variant_order),
+    allele_mapping = factor(allele_mapping, levels = c("homo", "het_unmapped", "high", "low"))
+  ) %>%
+  ggplot(aes(x = rsID, y = num_insertions, fill = allele_mapping)) +
+  geom_bar(stat = "identity", width = 1) +
+  scale_fill_manual(values = colors, guide = NULL) +
+  scale_y_continuous(limits = c(0,10000), expand = c(0,0)) +
+  xlab("fpQTLs") +
+  ylab("Insertions") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+df %>%
+  filter(rsID == "rs566487891")
+```
+
